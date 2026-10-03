@@ -37,6 +37,7 @@ export default function TopBar({ onActivity, onSettings }: { onActivity: () => v
       <div className="topbar-status" role="status" aria-live="polite">
         <Pill {...server} />
         {a.wsStatus === "open" && <Pill {...hermes} />}
+        {a.call.active && <Pill tone="busy" label="En appel" title="Appel vocal en cours avec Atlas" />}
       </div>
       <div className="topbar-actions">
         <button className="icon-btn" onClick={onActivity} aria-label="Ouvrir le panneau d'activité" title="Activité">

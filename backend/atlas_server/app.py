@@ -25,6 +25,7 @@ from .config import Settings, load_settings
 from .db import Database, new_id
 from .demo import DemoAdapter
 from .hermes_adapter import HermesAdapter, HermesError
+from .tasks import TaskError, TaskService
 from .turns import DEFAULT_TITLE, Busy, Hub, TurnManager, Unavailable
 from .util import redact, today_iso, valid_timezone
 from .voice.hermes_config import hermes_tts_settings
@@ -96,6 +97,24 @@ class ApprovalBody(BaseModel):
 
 class SpeakBody(BaseModel):
     message_id: str = Field(max_length=64)
+    text: str | None = Field(default=None, max_length=4000)
+
+
+class TaskBody(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    notes: str = Field(default="", max_length=2000)
+    due_date: str | None = Field(default=None, max_length=20)
+    due_time: str | None = Field(default=None, max_length=8)
+
+
+class TaskPatch(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    notes: str | None = Field(default=None, max_length=2000)
+    due_date: str | None = Field(default=None, max_length=20)
+    due_time: str | None = Field(default=None, max_length=8)
+    status: str | None = Field(default=None, pattern="^(todo|done)$")
+    clear_date: bool = False
+    clear_time: bool = False
 
 
 class ClientActivity(BaseModel):
@@ -155,6 +174,9 @@ class AtlasState:
             self.adapter = HermesAdapter(settings.hermes_url, settings.hermes_api_key,
                                          turn_timeout_s=settings.hermes_turn_timeout_s)
         self.turns = TurnManager(self.db, self.adapter, self.hub, settings)
+        self.tasks = TaskService(self.db, self.hub, self.turns.activity, self.turns.timezone)
+        self._mcp_seen = float(self.db.get_preferences().get("mcp_last_seen") or 0)
+        self.turns.mcp_connected = lambda: bool(self.db.get_preferences().get("mcp_last_seen"))
         self.limiter = auth.LoginRateLimiter()
         hermes_tts = hermes_tts_settings(settings.hermes_home)
         voice = settings.tts_voice or hermes_tts.get("edge_voice") or DEFAULT_VOICE
@@ -165,6 +187,13 @@ class AtlasState:
         self.hermes_tts = hermes_tts
         self.skills_cache: tuple[float, list[dict]] | None = None
         self.background: asyncio.Task | None = None
+
+    def mark_mcp_seen(self) -> None:
+        # Mémorisé en base (au plus une fois par minute) : survit à un redémarrage d'Atlas.
+        now = time.time()
+        if now - self._mcp_seen > 60:
+            self.db.set_preference("mcp_last_seen", now)
+            self._mcp_seen = now
 
     def preferences(self) -> dict[str, Any]:
         prefs = dict(DEFAULT_PREFS)
@@ -317,7 +346,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "preferences": st.preferences(), "hermes": st.adapter.status.public(),
                 "state": st.turns.snapshot(), "last_runtime": st.db.get_preferences().get("last_runtime"),
                 "network": network_info(), "voice": voice_info(st),
-                "schema_version": st.db.schema_version, "data_dir": str(settings.data_dir)}
+                "schema_version": st.db.schema_version, "data_dir": str(settings.data_dir),
+                "mcp": {"configured": bool(settings.mcp_token), "port": settings.mcp_port,
+                        "last_seen": st.db.get_preferences().get("mcp_last_seen")}}
 
     @app.get("/api/hermes/status")
     async def hermes_status(request: Request, refresh: bool = False):
@@ -505,6 +536,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await st.hub.broadcast({"type": "priorities.changed", "day": day})
         return {"ok": True}
 
+    # -- tâches -------------------------------------------------------------------------
+    @app.get("/api/tasks")
+    async def list_tasks(request: Request, scope: str = "today"):
+        st = atlas(request)
+        if scope not in ("today", "upcoming", "done", "overdue", "all"):
+            raise HTTPException(400, "Période inconnue.")
+        tz = st.preferences()["timezone"]
+        return {"today": today_iso(tz), "scope": scope, "items": st.db.list_tasks(scope, today_iso(tz))}
+
+    @app.post("/api/tasks")
+    async def add_task(body: TaskBody, request: Request):
+        try:
+            return await atlas(request).tasks.add(body.title, due_date=body.due_date, due_time=body.due_time,
+                                                  notes=body.notes, by="user")
+        except TaskError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.patch("/api/tasks/{tid}")
+    async def update_task(tid: str, body: TaskPatch, request: Request):
+        changes: dict[str, Any] = {"title": body.title, "notes": body.notes, "status": body.status}
+        if body.due_date is not None or body.clear_date:
+            changes["due_date"] = None if body.clear_date else body.due_date
+        if body.due_time is not None or body.clear_time:
+            changes["due_time"] = None if body.clear_time else body.due_time
+        try:
+            return await atlas(request).tasks.update(tid, by="user", **changes)
+        except TaskError as exc:
+            raise HTTPException(404 if "introuvable" in str(exc) else 400, str(exc))
+
+    @app.delete("/api/tasks/{tid}")
+    async def delete_task(tid: str, request: Request):
+        try:
+            await atlas(request).tasks.delete(tid, by="user")
+        except TaskError as exc:
+            raise HTTPException(404, str(exc))
+        return {"ok": True}
+
     # -- notes --------------------------------------------------------------------------
     @app.get("/api/notes")
     async def list_notes(request: Request):
@@ -606,16 +674,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def speak(body: SpeakBody, request: Request):
         st = atlas(request)
         msg = st.db.get_message(body.message_id)
-        if not msg or msg["role"] != "assistant" or not msg["content"].strip():
-            raise HTTPException(404, "Message introuvable ou vide.")
+        if not msg or msg["role"] != "assistant":
+            raise HTTPException(404, "Message introuvable.")
+        content = msg["content"]
+        active = st.turns.active
+        if active and active.assistant_message_id == msg["id"]:
+            content = active.content  # réponse encore en cours : lecture phrase par phrase
+        text = content
+        if body.text is not None:
+            # Un extrait n'est lu que s'il provient réellement de la réponse d'Atlas.
+            text = body.text.strip()
+            if not text or text not in content:
+                raise HTTPException(400, "Extrait introuvable dans la réponse.")
+        if not text.strip():
+            raise HTTPException(404, "Message vide.")
         started = time.monotonic()
         try:
-            audio, mime = await st.tts.synthesize(msg["content"])
+            audio, mime = await st.tts.synthesize(text)
         except TTSError as exc:
             await st.turns.activity("voix", "Synthèse vocale impossible", "error", detail=str(exc))
             raise HTTPException(422, detail={"code": exc.kind, "message": str(exc)})
-        await st.turns.activity("voix", "Synthèse vocale prête", "ok",
-                                duration_ms=int((time.monotonic() - started) * 1000))
+        if body.text is None or content.lstrip().startswith(text[:40]):
+            await st.turns.activity("voix", "Synthèse vocale prête", "ok",
+                                    duration_ms=int((time.monotonic() - started) * 1000))
         return Response(audio, media_type=mime, headers={"Cache-Control": "no-store"})
 
     # -- appareils, export ------------------------------------------------------------------
@@ -637,6 +718,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def export(request: Request, format: str = "json"):
         st = atlas(request)
         notes, priorities = st.db.list_notes(), st.db.list_priorities()
+        tasks = st.db.list_tasks("all", "")
         stamp = time.strftime("%Y%m%d-%H%M")
         if format == "md":
             lines = ["# Export Atlas", "", "## Priorités", ""]
@@ -644,6 +726,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for p in priorities:
                 lines.append(f"- [{ 'x' if p['status'] == 'done' else ' ' }] {p['day']} — {p['title']} "
                              f"({labels.get(p['status'], p['status'])})" + (f" — {p['description']}" if p["description"] else ""))
+            lines += ["", "## Tâches", ""]
+            for t in tasks:
+                lines.append(f"- [{'x' if t['status'] == 'done' else ' '}] {t['title']}"
+                             + (f" — {t['due_date']}" if t["due_date"] else "") + (f" {t['due_time']}" if t["due_time"] else ""))
             lines += ["", "## Notes", ""]
             for n in notes:
                 lines += [f"### Note du {time.strftime('%d/%m/%Y %H:%M', time.localtime(n['updated_at']))}", "",
@@ -651,7 +737,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return Response("\n".join(lines), media_type="text/markdown; charset=utf-8",
                             headers={"Content-Disposition": f'attachment; filename="atlas-export-{stamp}.md"'})
         payload = json.dumps({"exported_at": time.time(), "version": __version__, "notes": notes,
-                              "priorities": priorities}, ensure_ascii=False, indent=2)
+                              "priorities": priorities, "tasks": tasks}, ensure_ascii=False, indent=2)
         return Response(payload, media_type="application/json",
                         headers={"Content-Disposition": f'attachment; filename="atlas-export-{stamp}.json"'})
 

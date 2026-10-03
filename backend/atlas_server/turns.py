@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -28,6 +29,15 @@ log = logging.getLogger("atlas.turns")
 DEFAULT_TITLE = "Nouvelle conversation"
 
 TOOL_LABELS: list[tuple[str, str]] = [
+    ("mcp_atlas_tache_ajouter", "J'ajoute une tâche à ton tableau"),
+    ("mcp_atlas_tache_modifier", "Je modifie une tâche"),
+    ("mcp_atlas_tache_terminer", "Je coche une tâche"),
+    ("mcp_atlas_tache_supprimer", "Je supprime une tâche"),
+    ("mcp_atlas_taches_lister", "Je regarde tes tâches"),
+    ("mcp_atlas_journee", "Je regarde ta journée"),
+    ("mcp_atlas_priorite", "Je mets à jour tes priorités"),
+    ("mcp_atlas_note_ajouter", "J'ajoute une note"),
+    ("mcp_atlas_notes_chercher", "Je cherche dans tes notes"),
     ("memory", "Je consulte ma mémoire"),
     ("session_search", "Je retrouve nos anciennes conversations"),
     ("skill_view", "J'ouvre une compétence"),
@@ -54,7 +64,14 @@ TOOL_LABELS: list[tuple[str, str]] = [
 ]
 
 
-def tool_label(tool: str) -> str:
+ATLAS_TOOL_RE = re.compile(r"atlas_{1,2}([a-z_]+)")
+
+
+def tool_label(tool: str, preview: str | None = None) -> str:
+    # Outils d'Atlas : « mcp_atlas_x », « mcp__atlas__x », ou appelés via le pont « tool_call » d'Hermes.
+    match = ATLAS_TOOL_RE.search(f"{tool} {preview or ''}".lower()) if "atlas" in f"{tool}{preview}".lower() else None
+    if match:
+        tool = "mcp_atlas_" + match.group(1)
     lowered = (tool or "").lower()
     for key, label in TOOL_LABELS:
         if key in lowered:
@@ -118,6 +135,7 @@ class TurnManager:
         self.settings = settings
         self.active: ActiveTurn | None = None
         self._lock = asyncio.Lock()
+        self.mcp_connected = lambda: False
 
     # -- utilitaires ---------------------------------------------------------
     def timezone(self) -> str:
@@ -156,7 +174,11 @@ class TurnManager:
             f"date et heure actuelles : {french_datetime(tz)} (fuseau {tz}).",
         ]
         if kind == "voice":
-            parts.append("Ce message a été dicté à la voix et ta réponse sera lue à voix haute.")
+            parts.append("Ce message a été dicté à la voix (appel en direct) et ta réponse sera lue à voix haute : "
+                         "reste naturel et concis.")
+        if self.mcp_connected():
+            parts.append("Les outils mcp_atlas_* agissent sur son tableau de bord Atlas (tâches, priorités, notes), "
+                         "visible à l'écran : utilise-les quand il te confie une tâche ou demande ce qu'il reste à faire.")
         return " ".join(parts)
 
     # -- envoi -------------------------------------------------------------------
@@ -236,7 +258,7 @@ class TurnManager:
                 turn.last_flush = time.monotonic()
                 self.db.update_message(turn.assistant_message_id, content=turn.content)
         elif etype == "tool_started":
-            label = tool_label(event["tool"])
+            label = tool_label(event["tool"], event.get("preview"))
             turn.tools_started[event["tool"]] = time.monotonic()
             await self._set_state("acting", label)
             await self.activity("outil", f"{label}", "running", detail=f"{event['tool']} · {event.get('preview')}",
@@ -244,7 +266,7 @@ class TurnManager:
         elif etype == "tool_completed":
             started = turn.tools_started.pop(event["tool"], None)
             duration = int((time.monotonic() - started) * 1000) if started else None
-            await self.activity("outil", f"{tool_label(event['tool'])} — " + ("échec" if event["failed"] else "terminé"),
+            await self.activity("outil", f"{tool_label(event['tool'], event.get('preview'))} — " + ("échec" if event["failed"] else "terminé"),
                                 "error" if event["failed"] else "ok", duration_ms=duration,
                                 detail=f"{event['tool']} · {event.get('preview')}", run_id=turn.run_id,
                                 conversation_id=turn.conversation_id)

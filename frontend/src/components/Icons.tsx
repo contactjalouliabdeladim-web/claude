@@ -133,3 +133,25 @@ export const FlagIcon = (p: P) => (
     <path d="M5 21V4M5 4h11l-2 4 2 4H5" />
   </Icon>
 );
+export const SparkIcon = (p: P) => (
+  <Icon {...p}>
+    <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" />
+    <path d="M19 15l.7 1.8 1.8.7-1.8.7L19 20l-.7-1.8-1.8-.7 1.8-.7z" />
+  </Icon>
+);
+export const PhoneIcon = (p: P) => (
+  <Icon {...p}>
+    <path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2" />
+  </Icon>
+);
+export const HangUpIcon = (p: P) => (
+  <Icon {...p}>
+    <path d="M3 14.5c5-5 13-5 18 0l-2.5 2.5-3.5-1.5V13a12 12 0 0 0-6 0v2.5L5.5 17z" />
+  </Icon>
+);
+export const MicOffIcon = (p: P) => (
+  <Icon {...p}>
+    <path d="M9 9v2a3 3 0 0 0 5 2.2M15 10V6a3 3 0 0 0-5.7-1.3" />
+    <path d="M5 11a7 7 0 0 0 11.5 5.3M19 11a7 7 0 0 1-.6 2.8M12 18v3M3 3l18 18" />
+  </Icon>
+);

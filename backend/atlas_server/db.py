@@ -93,6 +93,22 @@ MIGRATIONS: list[str] = [
         value TEXT NOT NULL
     );
     """,
+    # 2 — tâches (ajoutées par toi ou par Atlas via ses outils)
+    """
+    CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        notes TEXT NOT NULL DEFAULT '',
+        due_date TEXT,
+        due_time TEXT,
+        status TEXT NOT NULL DEFAULT 'todo',
+        source TEXT NOT NULL DEFAULT 'user',
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        completed_at REAL
+    );
+    CREATE INDEX idx_tasks_due ON tasks(status, due_date);
+    """,
 ]
 
 
@@ -114,17 +130,22 @@ class Database:
 
     # -- infrastructure -------------------------------------------------
     def _migrate(self) -> None:
+        # BEGIN IMMEDIATE + relecture de la version : sûr si deux processus (Atlas et le serveur
+        # d'outils lancé par Hermes) ouvrent la base en même temps.
         with self._lock:
             self._conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
-            row = self._conn.execute("SELECT version FROM schema_version").fetchone()
-            current = row[0] if row else 0
-            for index, script in enumerate(MIGRATIONS[current:], start=current + 1):
-                self._conn.execute("BEGIN")
+            while True:
+                self._conn.execute("BEGIN IMMEDIATE")
                 try:
-                    for statement in [s for s in script.split(";") if s.strip()]:
+                    row = self._conn.execute("SELECT version FROM schema_version").fetchone()
+                    current = row[0] if row else 0
+                    if current >= len(MIGRATIONS):
+                        self._conn.execute("COMMIT")
+                        return
+                    for statement in [s for s in MIGRATIONS[current].split(";") if s.strip()]:
                         self._conn.execute(statement)
                     self._conn.execute("DELETE FROM schema_version")
-                    self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (index,))
+                    self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (current + 1,))
                     self._conn.execute("COMMIT")
                 except Exception:
                     self._conn.execute("ROLLBACK")
@@ -283,6 +304,53 @@ class Database:
 
     def get_priority(self, pid: str) -> dict | None:
         return self.one("SELECT * FROM priorities WHERE id = ?", (pid,))
+
+    # -- tâches ----------------------------------------------------------------
+    TASK_FIELDS = ("title", "notes", "due_date", "due_time", "status")
+
+    def get_task(self, tid: str) -> dict | None:
+        return self.one("SELECT * FROM tasks WHERE id = ?", (tid,))
+
+    def add_task(self, title: str, *, notes: str = "", due_date: str | None = None, due_time: str | None = None,
+                 source: str = "user") -> dict:
+        now = time.time()
+        task = {"id": new_id("task"), "title": title, "notes": notes, "due_date": due_date, "due_time": due_time,
+                "status": "todo", "source": source, "created_at": now, "updated_at": now, "completed_at": None}
+        self.execute("INSERT INTO tasks (id, title, notes, due_date, due_time, status, source, created_at, updated_at, "
+                     "completed_at) VALUES (?,?,?,?,?,?,?,?,?,?)", tuple(task.values()))
+        return task
+
+    def update_task(self, tid: str, **fields: Any) -> dict | None:
+        fields = {k: v for k, v in fields.items() if k in self.TASK_FIELDS}
+        if "status" in fields:
+            fields["completed_at"] = time.time() if fields["status"] == "done" else None
+        if fields:
+            fields["updated_at"] = time.time()
+            cols = ", ".join(f"{k} = ?" for k in fields)
+            self.execute(f"UPDATE tasks SET {cols} WHERE id = ?", (*fields.values(), tid))
+        return self.get_task(tid)
+
+    def delete_task(self, tid: str) -> bool:
+        return self.execute("DELETE FROM tasks WHERE id = ?", (tid,)).rowcount > 0
+
+    def list_tasks(self, scope: str, today: str, limit: int = 200) -> list[dict]:
+        """scope : today (aujourd'hui + en retard + sans date), upcoming, done, overdue, all."""
+        order = "ORDER BY due_date IS NULL, due_date, due_time IS NULL, due_time, created_at"
+        if scope == "today":
+            sql = f"SELECT * FROM tasks WHERE status = 'todo' AND (due_date IS NULL OR due_date <= ?) {order}"
+            params: tuple = (today,)
+        elif scope == "upcoming":
+            sql, params = f"SELECT * FROM tasks WHERE status = 'todo' AND due_date > ? {order}", (today,)
+        elif scope == "overdue":
+            sql, params = f"SELECT * FROM tasks WHERE status = 'todo' AND due_date < ? {order}", (today,)
+        elif scope == "done":
+            sql, params = "SELECT * FROM tasks WHERE status = 'done' ORDER BY completed_at DESC", ()
+        else:
+            sql, params = f"SELECT * FROM tasks {order}", ()
+        return self.all(sql + " LIMIT ?", (*params, limit))
+
+    def done_today(self, day_start: float) -> int:
+        return self.one("SELECT COUNT(*) AS n FROM tasks WHERE status = 'done' AND completed_at >= ?", (day_start,))["n"]
 
     # -- notes ---------------------------------------------------------------
     def list_notes(self) -> list[dict]:

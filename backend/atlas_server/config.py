@@ -94,6 +94,8 @@ class Settings:
     hermes_dashboard_token: str = ""
     daily_skill: str = ""  # nom exact de la compétence « Suivi quotidien » (vide = détection)
     demo: bool = False
+    mcp_port: int = 8766
+    mcp_token: str = ""
     max_message_chars: int = 20000
     max_audio_bytes: int = 12 * 1024 * 1024
 
@@ -119,7 +121,7 @@ def load_settings(data_dir: Path | None = None) -> Settings:
     env = parse_env_file(data_dir / "atlas.env")
     # Les variables d'environnement du processus ont priorité (pratique pour les tests).
     for key in list(env.keys()) + [
-        "ATLAS_DEMO", "ATLAS_PORT", "ATLAS_LAN", "HERMES_URL", "HERMES_API_KEY", "ATLAS_STT", "ATLAS_TTS",
+        "ATLAS_DEMO", "ATLAS_PORT", "ATLAS_MCP_PORT", "ATLAS_LAN", "HERMES_URL", "HERMES_API_KEY", "ATLAS_STT", "ATLAS_TTS",
     ]:
         if os.environ.get(key):
             env[key] = os.environ[key]
@@ -145,6 +147,8 @@ def load_settings(data_dir: Path | None = None) -> Settings:
         hermes_dashboard_token=env.get("HERMES_DASHBOARD_TOKEN", ""),
         daily_skill=env.get("ATLAS_DAILY_SKILL", "").strip(),
         demo=_bool(env.get("ATLAS_DEMO")),
+        mcp_port=int(env.get("ATLAS_MCP_PORT") or 8766),
+        mcp_token=env.get("ATLAS_MCP_TOKEN", "").strip(),
     )
 
 
@@ -181,6 +185,10 @@ HERMES_DASHBOARD_TOKEN=
 # Nom exact de la compétence de suivi quotidien (vide = détection automatique).
 ATLAS_DAILY_SKILL=
 
+# Outils d'Atlas pour Hermes (tâches, priorités, notes) — serveur MCP local, jamais exposé au réseau.
+ATLAS_MCP_PORT=8766
+ATLAS_MCP_TOKEN={mcp_token}
+
 # Mode démonstration (réponses simulées, base séparée). Ne pas activer en usage normal.
 ATLAS_DEMO=0
 """
@@ -193,5 +201,17 @@ def ensure_env_file(data_dir: Path) -> tuple[Path, bool]:
     if path.exists():
         return path, False
     path.write_text(
-        ENV_TEMPLATE.format(port=DEFAULT_PORT, hermes_key=secrets.token_hex(32)), encoding="utf-8")
+        ENV_TEMPLATE.format(port=DEFAULT_PORT, hermes_key=secrets.token_hex(32), mcp_token=secrets.token_hex(24)),
+        encoding="utf-8")
     return path, True
+
+
+def ensure_mcp_token(data_dir: Path) -> str:
+    """Ajoute le jeton des outils MCP à une configuration créée par une version précédente."""
+    path = data_dir / "atlas.env"
+    values = parse_env_file(path)
+    if values.get("ATLAS_MCP_TOKEN"):
+        return values["ATLAS_MCP_TOKEN"]
+    token = secrets.token_hex(24)
+    update_env_file(path, {"ATLAS_MCP_PORT": values.get("ATLAS_MCP_PORT") or "8766", "ATLAS_MCP_TOKEN": token})
+    return token

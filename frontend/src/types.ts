@@ -118,6 +118,7 @@ export interface Bootstrap {
   voice: VoiceInfo;
   schema_version: number;
   data_dir: string;
+  mcp?: { configured: boolean; port: number; last_seen: number | null };
 }
 
 /** États visuels de l'orbe : ceux du serveur + ceux propres à cet appareil (micro, lecture). */
@@ -131,3 +132,27 @@ export type OrbState =
   | "speaking"
   | "error"
   | "offline";
+
+export interface Task {
+  id: string;
+  title: string;
+  notes: string;
+  due_date: string | null;
+  due_time: string | null;
+  status: "todo" | "done";
+  source: "user" | "atlas";
+  created_at: number;
+  updated_at: number;
+  completed_at: number | null;
+}
+
+export type CallPhase = "connecting" | "listening" | "hearing" | "transcribing" | "waiting" | "speaking" | "muted";
+
+export interface CallState {
+  active: boolean;
+  phase: CallPhase;
+  startedAt: number;
+  muted: boolean;
+  userCaption: string;
+  atlasCaption: string;
+}

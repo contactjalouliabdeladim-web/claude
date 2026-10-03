@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api";
 import { useAtlas } from "../controller";
 import type { Note, Priority } from "../types";
-import { CheckIcon, DownIcon, EditIcon, PlusIcon, ShareIcon, SunIcon, TrashIcon, UpIcon } from "./Icons";
+import { CheckIcon, DownIcon, EditIcon, PlusIcon, ShareIcon, TrashIcon, UpIcon } from "./Icons";
+import Tasks from "./Tasks";
 
 function capitalize(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -34,11 +35,39 @@ export function Clock() {
   }, [day]);
   const time = safeFormat({ hour: "2-digit", minute: "2-digit" }, tz, now);
   const date = capitalize(safeFormat({ weekday: "long", day: "numeric", month: "long", year: "numeric" }, tz, now));
+  const hour = parseInt(safeFormat({ hour: "2-digit", hourCycle: "h23" } as Intl.DateTimeFormatOptions, tz, now), 10);
+  const greeting = hour < 5 ? "Bonne nuit" : hour < 12 ? "Bonjour" : hour < 18 ? "Bon après-midi" : "Bonsoir";
+  const todayStr = a.tasks.day;
+  const doneToday = a.tasks.done.filter((t) => t.completed_at && safeFormat({ year: "numeric", month: "2-digit", day: "2-digit" }, tz, new Date(t.completed_at * 1000)) === day).length;
+  const remaining = a.tasks.today.length;
+  const total = remaining + doneToday;
+  const ratio = total ? doneToday / total : 0;
+  const late = a.tasks.today.filter((t) => t.due_date && todayStr && t.due_date < todayStr).length;
+  const prioDone = a.priorities.filter((p) => p.status === "done").length;
+  const R = 26;
+  const C = 2 * Math.PI * R;
   return (
-    <section className="clock" aria-label="Heure et date">
-      <div className="clock-time">{time}</div>
-      <div className="clock-date">{date}</div>
-      <div className="clock-tz">{tz.replace(/_/g, " ")}</div>
+    <section className="clock card hero" aria-label="Heure et date">
+      <div className="hero-text">
+        <div className="greeting">{greeting}</div>
+        <div className="clock-time">{time}</div>
+        <div className="clock-date">{date}</div>
+        <div className="clock-tz">{tz.replace(/_/g, " ")}</div>
+      </div>
+      <div className="day-progress" title={`${doneToday} tâche(s) faite(s) sur ${total} aujourd'hui`}>
+        <svg viewBox="0 0 64 64" width="72" height="72" aria-hidden="true">
+          <circle cx="32" cy="32" r={R} className="ring-bg" />
+          <circle cx="32" cy="32" r={R} className="ring-fg" strokeDasharray={C} strokeDashoffset={C * (1 - ratio)} transform="rotate(-90 32 32)" />
+        </svg>
+        <div className="ring-text">
+          <strong>{doneToday}</strong>/{total}
+        </div>
+      </div>
+      <ul className="hero-stats">
+        <li><strong>{remaining}</strong> à faire</li>
+        {late > 0 && <li className="late"><strong>{late}</strong> en retard</li>}
+        <li><strong>{prioDone}/{a.priorities.length}</strong> priorités</li>
+      </ul>
     </section>
   );
 }
@@ -95,7 +124,6 @@ export function Priorities() {
   const a = useAtlas();
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
-  const [daily, setDaily] = useState<{ available: boolean; name?: string; prompt?: string; reason?: string } | null>(null);
   const items = a.priorities;
 
   useEffect(() => {
@@ -104,11 +132,6 @@ export function Priorities() {
       setEditing(null);
     }
   }, [a.priorityDraft]);
-
-  useEffect(() => {
-    if (!a.hermes || !a.hermes.authenticated) return;
-    api<typeof daily>("/api/skills/daily").then(setDaily).catch(() => setDaily(null));
-  }, [a.hermes && a.hermes.authenticated]);
 
   const fail = (e: unknown) => a.toast({ kind: "error", text: (e as Error).message });
 
@@ -139,9 +162,9 @@ export function Priorities() {
   };
 
   return (
-    <section className="panel-section" aria-labelledby="prio-heading">
+    <section className="panel-section card" aria-labelledby="prio-heading">
       <div className="section-head">
-        <h2 id="prio-heading">Priorités du jour</h2>
+        <h2 id="prio-heading">Mes 3 priorités</h2>
         <span className="muted small">{items.length}/3</span>
       </div>
       {items.length === 0 && !adding && <p className="empty">Aucune priorité pour aujourd'hui. Choisis-en jusqu'à trois.</p>}
@@ -211,17 +234,6 @@ export function Priorities() {
           </button>
         )
       )}
-      <div className="prepare-day">
-        <button
-          className="btn btn-outline btn-block"
-          disabled={!daily || !daily.available || a.busy || a.sending}
-          onClick={() => daily && daily.prompt && a.send(daily.prompt)}
-          title={daily && daily.available ? `Utilise la compétence « ${daily.name} » d'Hermes` : (daily && daily.reason) || "Hermes indisponible"}
-        >
-          <SunIcon size={16} /> Préparer ma journée avec Atlas
-        </button>
-        {daily && !daily.available && <p className="muted small">{daily.reason}</p>}
-      </div>
     </section>
   );
 }
@@ -312,7 +324,7 @@ export function Notes() {
     }
   };
   return (
-    <section className="panel-section notes" aria-labelledby="notes-heading">
+    <section className="panel-section card notes" aria-labelledby="notes-heading">
       <div className="section-head">
         <h2 id="notes-heading">Notes rapides</h2>
         <button className="icon-btn sm" onClick={create} aria-label="Nouvelle note" title="Nouvelle note"><PlusIcon size={16} /></button>
@@ -368,6 +380,7 @@ export default function DayPanel() {
     <aside className="day-panel" aria-label="Ma journée">
       <Clock />
       <Priorities />
+      <Tasks />
       <Notes />
     </aside>
   );

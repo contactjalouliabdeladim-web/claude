@@ -136,6 +136,12 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
                   <span className="muted">Liste indisponible (les noms apparaissent après une première autorisation du micro).</span>
                 )}
               </Row>
+              <Row label="Appel en direct">
+                <label className="check">
+                  <input type="checkbox" checked={a.bargeIn} onChange={(e) => a.setBargeIn(e.target.checked)} />
+                  Pouvoir couper la parole à Atlas en parlant (un casque ou des écouteurs évitent l'écho)
+                </label>
+              </Row>
               <Row label="Dictée">
                 <label className="check">
                   <input
@@ -181,6 +187,11 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
               <Row label="Consommation">
                 {usage ? `Dernière réponse : ${usage.total_tokens || (usage.input_tokens || 0) + (usage.output_tokens || 0)} jetons (rapporté par Hermes).` : "Indisponible."}{" "}
                 <span className="muted small">Le quota restant de ton abonnement n'est pas connu d'Atlas.</span>
+              </Row>
+              <Row label="Outils Atlas dans Hermes">
+                {boot.mcp && boot.mcp.last_seen
+                  ? `Connectés (dernier contact d'Hermes : ${new Date(boot.mcp.last_seen * 1000).toLocaleString("fr-FR")}). Atlas peut ajouter et modifier tes tâches à ta demande.`
+                  : "Pas encore connectés : lance scripts\\windows\\Connecter-Outils-Atlas.ps1 puis redémarre la passerelle Hermes."}
               </Row>
               <Row label="Accès réseau local">
                 {boot.network.lan ? (

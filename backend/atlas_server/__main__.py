@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -19,7 +20,7 @@ import time
 
 from . import __version__
 from .auth import ensure_access_code, set_access_code
-from .config import default_data_dir, ensure_env_file, load_settings
+from .config import default_data_dir, ensure_env_file, ensure_mcp_token, load_settings
 from .db import Database
 
 
@@ -34,6 +35,7 @@ def _utf8_console() -> None:
 def cmd_init(_args) -> int:
     data_dir = default_data_dir()
     env_path, created = ensure_env_file(data_dir)
+    ensure_mcp_token(data_dir)
     settings = load_settings(data_dir)
     db = Database(settings.db_path)
     code = ensure_access_code(db, data_dir)
@@ -104,14 +106,26 @@ def cmd_check(_args) -> int:
     return asyncio.run(run())
 
 
+def _port_free(host: str, port: int) -> bool:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((host, port))
+            return True
+        except OSError:
+            return False
+
+
 def cmd_serve(args) -> int:
     import uvicorn
     from .app import create_app
+    from .internal_server import create_internal_app
 
     settings = load_settings()
     if not settings.env_path.exists():
         cmd_init(args)
-        settings = load_settings()
+    ensure_mcp_token(settings.data_dir)
+    settings = load_settings()
     ssl_kwargs = {}
     if settings.https:
         from .certs import ensure_server_certificate
@@ -120,7 +134,7 @@ def cmd_serve(args) -> int:
     pid_path = settings.data_dir / "atlas.pid"
     pid_path.write_text(str(os.getpid()), encoding="utf-8")
     code_file = settings.data_dir / "CODE-ACCES.txt"
-    print(f"Atlas {__version__} démarre sur {settings.scheme}://{'localhost'}:{settings.port}")
+    print(f"Atlas {__version__} démarre sur {settings.scheme}://localhost:{settings.port}")
     if settings.lan:
         from .certs import local_ip_addresses
         for ip in local_ip_addresses():
@@ -128,9 +142,39 @@ def cmd_serve(args) -> int:
     if code_file.exists():
         print("  " + code_file.read_text(encoding="utf-8").strip().replace("\n\n", " "))
     print("Pour arrêter : Ctrl+C dans cette fenêtre.")
+
+    app = create_app(settings)
+    main_server = uvicorn.Server(uvicorn.Config(
+        app, host=settings.host, port=settings.port, log_level="warning", ws="websockets-sansio",
+        proxy_headers=False, server_header=False, **ssl_kwargs))
+
+    class QuietServer(uvicorn.Server):
+        """Serveur secondaire : laisse la gestion de Ctrl+C au serveur principal."""
+        @contextlib.contextmanager
+        def capture_signals(self):
+            yield
+
+    async def run() -> None:
+        mcp_server = None
+        mcp_task = None
+        if settings.mcp_token and _port_free("127.0.0.1", settings.mcp_port):
+            mcp_server = QuietServer(uvicorn.Config(
+                create_internal_app(app, lambda: settings.mcp_token), host="127.0.0.1", port=settings.mcp_port,
+                log_level="warning", lifespan="off", server_header=False))
+            mcp_task = asyncio.create_task(mcp_server.serve())
+            print(f"  Liaison interne avec les outils d'Atlas : 127.0.0.1:{settings.mcp_port}")
+        elif settings.mcp_token:
+            print(f"  ATTENTION : port {settings.mcp_port} occupé : les actions d'Atlas (tâches) n'apparaîtront "
+                  "qu'après rechargement de la page.")
+        try:
+            await main_server.serve()
+        finally:
+            if mcp_server is not None:
+                mcp_server.should_exit = True
+                await mcp_task
+
     try:
-        uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_level="warning",
-                    ws="websockets", proxy_headers=False, server_header=False, **ssl_kwargs)
+        asyncio.run(run())
     finally:
         try:
             pid_path.unlink()
@@ -139,12 +183,19 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def cmd_mcp_stdio(_args) -> int:
+    from .mcp_stdio import main as stdio_main
+    return stdio_main()
+
+
 def main(argv: list[str] | None = None) -> int:
-    _utf8_console()
+    if not (argv or sys.argv[1:])[:1] == ["mcp-stdio"]:
+        _utf8_console()
     parser = argparse.ArgumentParser(prog="atlas_server", description="Serveur de l'interface Atlas")
     sub = parser.add_subparsers(dest="command")
     for name, func in (("init", cmd_init), ("serve", cmd_serve), ("verifier", cmd_check),
-                       ("nouveau-code", cmd_new_code), ("sauvegarder", cmd_backup), ("certificats", cmd_certs)):
+                       ("nouveau-code", cmd_new_code), ("sauvegarder", cmd_backup), ("certificats", cmd_certs),
+                       ("mcp-stdio", cmd_mcp_stdio)):
         sub.add_parser(name).set_defaults(func=func)
     args = parser.parse_args(argv)
     if not getattr(args, "func", None):

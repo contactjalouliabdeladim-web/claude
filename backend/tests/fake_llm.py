@@ -53,29 +53,45 @@ async def completions(request: Request):
     last_user = next((text_of(m.get("content")) for m in reversed(messages) if m.get("role") == "user"), "")
     with LOG.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps({"ts": time.time(), "last_role": last.get("role"), "last_user": last_user[:200],
-                             "tools": len(body.get("tools") or []), "system_head": system[:160]}) + "\n")
+                             "tools": len(body.get("tools") or []), "system_head": system[:160], "tool_names": [t.get("function", {}).get("name") for t in (body.get("tools") or [])]}) + "\n")
     stream = bool(body.get("stream"))
     lowered = last_user.lower()
     tool_call = None
     text = None
     if last.get("role") == "tool":
-        text = "C'est fait, l'action est terminée."
+        result = text_of(last.get("content"))
+        text = "C'est fait, l'action est terminée." + (" (confirmé par Atlas)" if ('"ok": true' in result or '\\"ok\\": true' in result) else "")
     elif "quota" in lowered:
         return JSONResponse({"error": {"message": "You exceeded your current quota, please check your plan.",
                                        "type": "insufficient_quota", "code": "insufficient_quota"}}, status_code=429)
+    elif "tâche" in lowered and ("ajoute" in lowered or "rappelle" in lowered):
+        tool_call = ("mcp_atlas_tache_ajouter", {"titre": "Appeler le comptable", "date": "aujourd'hui", "heure": "15h"})
+    elif "reste" in lowered and "faire" in lowered:
+        tool_call = ("mcp_atlas_journee", {})
     elif "dangereux" in lowered:
-        tool_call = {"command": "rm -rf /tmp/atlas-test-dangerous-dir"}
+        tool_call = ("terminal", {"command": "rm -rf /tmp/atlas-test-dangerous-dir"})
     elif "outil" in lowered:
-        tool_call = {"command": "echo atlas-test"}
+        tool_call = ("terminal", {"command": "echo atlas-test"})
     else:
         soul = "personnalité reçue" if "ATLAS-SOUL-MARKER" in system else "personnalité absente"
         ctx = "contexte reçu" if "Africa/Casablanca" in system else "contexte absent"
         text = f"Bonjour ! Réponse du faux modèle ({soul}, {ctx})."
         if "lent" in lowered:
             text = " ".join(["mot"] * 40)
+    if tool_call is not None and tool_call[0].startswith("mcp_atlas_"):
+        # Nom réel selon la version d'Hermes : mcp_atlas_x, mcp__atlas__x, ou via le pont tool_call.
+        names = [t.get("function", {}).get("name") for t in (body.get("tools") or [])]
+        short = tool_call[0][len("mcp_atlas_"):]
+        for candidate in (f"mcp__atlas__{short}", f"mcp_atlas_{short}"):
+            if candidate in names:
+                tool_call = (candidate, tool_call[1])
+                break
+        else:
+            if "tool_call" in names:
+                tool_call = ("tool_call", {"calls": [{"name": f"mcp__atlas__{short}", "arguments": tool_call[1]}]})
     if tool_call is not None:
         call = {"index": 0, "id": f"call_{int(time.time()*1000)}", "type": "function",
-                "function": {"name": "terminal", "arguments": json.dumps(tool_call)}}
+                "function": {"name": tool_call[0], "arguments": json.dumps(tool_call[1])}}
         if not stream:
             return {"id": "chatcmpl-fake", "object": "chat.completion", "created": int(time.time()), "model": "fake-model",
                     "choices": [{"index": 0, "finish_reason": "tool_calls",

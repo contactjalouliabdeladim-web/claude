@@ -18,7 +18,7 @@ from atlas_server import auth
 from atlas_server.app import create_app, scan_skill_dirs
 from atlas_server.certs import ensure_server_certificate
 from atlas_server.config import ensure_env_file, load_settings, parse_env_file, update_env_file
-from atlas_server.db import Database
+from atlas_server.db import MIGRATIONS, Database
 from atlas_server.hermes_adapter import HermesAdapter, HermesError, classify_failure_text, iter_sse
 from atlas_server.util import redact, valid_timezone
 from atlas_server.voice.hermes_config import read_simple_yaml_value
@@ -61,14 +61,14 @@ def test_hermes_yaml_reader(tmp_path):
 # -- base de données ----------------------------------------------------------------
 def test_db_migration_and_messages(tmp_path):
     db = Database(tmp_path / "a.db")
-    assert db.schema_version == 1
+    assert db.schema_version == len(MIGRATIONS)
     conv = db.create_conversation()
     msg = db.add_message(conv["id"], "assistant", "", status="streaming")
     assert db.mark_interrupted_messages() == 1
     assert db.get_message(msg["id"])["status"] == "interrupted"
     db.close()
     db2 = Database(tmp_path / "a.db")  # réouverture : pas de nouvelle migration
-    assert db2.schema_version == 1 and len(db2.list_conversations()) == 1
+    assert db2.schema_version == len(MIGRATIONS) and len(db2.list_conversations()) == 1
 
 
 def test_events_are_capped(tmp_path):
@@ -333,3 +333,56 @@ def test_message_validation(client):
 def test_transcribe_rejects_wrong_format(client):
     r = client.post("/api/voice/transcribe", content=b"abc", headers={"Content-Type": "audio/webm"})
     assert r.status_code == 415
+
+
+# -- tâches et outils d'Atlas (MCP) --------------------------------------------------------------
+def test_task_parsing():
+    from atlas_server.tasks import TaskError, parse_due_date, parse_due_time
+    assert parse_due_time("15h") == "15:00" and parse_due_time("9h30") == "09:30" and parse_due_time("") is None
+    assert len(parse_due_date("demain", "Africa/Casablanca")) == 10
+    with pytest.raises(TaskError):
+        parse_due_time("25:99")
+    with pytest.raises(TaskError):
+        parse_due_date("bientôt", "UTC")
+
+
+def test_tasks_api(client):
+    t = client.post("/api/tasks", json={"title": "Payer la facture", "due_date": "demain", "due_time": "10h"}).json()
+    assert t["due_time"] == "10:00" and t["source"] == "user"
+    assert client.get("/api/tasks?scope=upcoming").json()["items"][0]["id"] == t["id"]
+    done = client.patch(f"/api/tasks/{t['id']}", json={"status": "done"}).json()
+    assert done["status"] == "done" and done["completed_at"]
+    assert client.get("/api/tasks?scope=done").json()["items"][0]["id"] == t["id"]
+    assert client.patch(f"/api/tasks/{t['id']}", json={"due_time": "99:99"}).status_code == 400
+    assert client.delete(f"/api/tasks/{t['id']}").status_code == 200
+
+
+def test_mcp_stdio_roundtrip(tmp_path, monkeypatch):
+    """Le serveur d'outils lancé par Hermes : JSON-RPC ligne par ligne, écriture réelle en base."""
+    import subprocess
+    import sys
+    ensure_env_file(tmp_path)
+    Database(tmp_path / "atlas.db").close()
+    lines = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+         "params": {"name": "tache_ajouter", "arguments": {"titre": "Appeler le comptable", "heure": "15h"}}},
+        {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "tache_ajouter", "arguments": {}}},
+        {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "journee", "arguments": {}}},
+    ]
+    env = dict(__import__("os").environ, ATLAS_DATA_DIR=str(tmp_path), ATLAS_DEMO="0")
+    proc = subprocess.run([sys.executable, "-m", "atlas_server", "mcp-stdio"], input="\n".join(json.dumps(m) for m in lines) + "\n",
+                          capture_output=True, text=True, env=env, cwd=Path(__file__).resolve().parents[1], timeout=60)
+    replies = [json.loads(l) for l in proc.stdout.splitlines()]
+    assert [r["id"] for r in replies] == [1, 2, 3, 4, 5]  # pas de réponse aux notifications, rien d'autre sur stdout
+    assert replies[0]["result"]["protocolVersion"] == "2025-06-18"
+    assert len(replies[1]["result"]["tools"]) == 10
+    added = replies[2]["result"]["structuredContent"]
+    assert added["ok"] and added["tache"]["heure"] == "15:00" and added["tache"]["ajoutee_par"] == "Atlas"
+    assert replies[3]["result"]["isError"] is True
+    assert replies[4]["result"]["structuredContent"]["taches_du_jour"][0]["titre"] == "Appeler le comptable"
+    db = Database(tmp_path / "atlas.db")
+    assert db.list_tasks("all", "")[0]["source"] == "atlas"
+    assert any("Atlas a ajouté la tâche" in e["label"] for e in db.list_events())

@@ -49,7 +49,7 @@ export async function listInputDevices(): Promise<{ id: string; label: string }[
     .map((d, i) => ({ id: d.deviceId, label: d.label || `Micro ${i + 1}` }));
 }
 
-function encodeWav(samples: Float32Array, rate: number): Blob {
+export function encodeWav(samples: Float32Array, rate: number): Blob {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
   const view = new DataView(buffer);
   const writeStr = (off: number, s: string) => {
@@ -76,7 +76,7 @@ function encodeWav(samples: Float32Array, rate: number): Blob {
   return new Blob([view], { type: "audio/wav" });
 }
 
-function downsample(chunks: Float32Array[], inRate: number, outRate: number): Float32Array {
+export function downsample(chunks: Float32Array[], inRate: number, outRate: number): Float32Array {
   let total = 0;
   for (const c of chunks) total += c.length;
   const merged = new Float32Array(total);

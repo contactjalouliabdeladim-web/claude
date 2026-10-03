@@ -157,6 +157,11 @@ if (-not (Test-Path -LiteralPath $hermesHome)) {
     }
 }
 
+# --- 5 bis. Outils d'Atlas pour Hermes (tâches visibles dans l'interface) ----------------------
+if ($hermesCmd -and -not $NonInteractif) {
+    & (Join-Path $PSScriptRoot 'Connecter-Outils-Atlas.ps1')
+}
+
 # --- 6. Vérification --------------------------------------------------------------------------
 Ecrire-Etape '6/6  Vérification (aucun appel au modèle)'
 $null = Executer-Atlas @('verifier')
