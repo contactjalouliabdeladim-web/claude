@@ -1,0 +1,3 @@
+# Optionnel : transcription vocale locale (sur le PC Windows, sans service distant).
+# Environ 300 Mo de téléchargement ; le modèle de reconnaissance est téléchargé au premier usage.
+faster-whisper==1.2.1

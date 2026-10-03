@@ -1,0 +1,8 @@
+# Dépendances du serveur Atlas (versions figées et vérifiées).
+fastapi==0.142.2
+uvicorn==0.54.0
+websockets==15.0.1
+httpx==0.28.1
+edge-tts==7.2.8
+cryptography==50.0.2
+tzdata==2026.1
