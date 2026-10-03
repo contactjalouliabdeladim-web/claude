@@ -21,7 +21,10 @@ if ($git -and (Test-Path -LiteralPath (Join-Path $Racine '.git'))) {
 Ecrire-Etape '3/3  Dépendances'
 & $VenvPython -m pip install --disable-pip-version-check -q -r (Join-Path $Backend 'requirements.txt')
 if ($LASTEXITCODE -ne 0) { Arreter-AvecErreur 'Mise à jour des dépendances échouée.' }
+# PowerShell 5.1 : une sortie d'erreur redirigée devient une erreur bloquante sous « Stop ».
+$ErrorActionPreference = 'Continue'
 & $VenvPython -c "import faster_whisper" 2>$null
+$ErrorActionPreference = 'Stop'
 if ($LASTEXITCODE -eq 0) {
     & $VenvPython -m pip install --disable-pip-version-check -q -r (Join-Path $Backend 'requirements-voix-locale.txt')
 }

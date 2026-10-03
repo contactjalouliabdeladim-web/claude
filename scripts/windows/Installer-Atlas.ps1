@@ -20,7 +20,13 @@ Write-Host "  Dossier : $Racine"
 # --- 1. Python ----------------------------------------------------------------------------
 Ecrire-Etape '1/6  Recherche de Python 3.11 à 3.13'
 $pythonBase = $null
-$candidats = @(
+$candidats = @()
+# Installations « pour moi seul » de python.org : souvent hors PATH et sans le lanceur « py ».
+foreach ($v in @('312', '311', '313')) {
+    $exe = Join-Path $env:LOCALAPPDATA "Programs\Python\Python$v\python.exe"
+    if (Test-Path -LiteralPath $exe) { $candidats += ,@($exe, $null) }
+}
+$candidats += @(
     @('py', '-3.12'), @('py', '-3.11'), @('py', '-3.13'), @('python', $null), @('python3', $null)
 )
 foreach ($c in $candidats) {
@@ -28,7 +34,8 @@ foreach ($c in $candidats) {
     if (-not $cmd) { continue }
     $argsVersion = @()
     if ($c[1]) { $argsVersion += $c[1] }
-    $argsVersion += @('-c', 'import sys; print("%d.%d" % sys.version_info[:2])')
+    # Sans guillemets doubles : PowerShell 5.1 les retire des arguments passés à un programme.
+    $argsVersion += @('-c', 'import sys;v=sys.version_info;print(str(v[0])+chr(46)+str(v[1]))')
     try {
         $version = (& $c[0] @argsVersion 2>$null | Select-Object -First 1)
     } catch { continue }
@@ -84,7 +91,10 @@ $code = Executer-Atlas @('init')
 if ($code -ne 0) { Arreter-AvecErreur 'Préparation des données impossible.' }
 $cfg = Lire-Env $FichierConfig
 if ($installerVoix -eq $false -and $cfg['ATLAS_STT'] -eq 'local_whisper') {
+    # PowerShell 5.1 : une sortie d'erreur redirigée devient une erreur bloquante sous « Stop ».
+    $ErrorActionPreference = 'Continue'
     & $VenvPython -c "import faster_whisper" 2>$null
+    $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -ne 0) { Ecrire-Info 'Dictée : non disponible tant que la transcription n''est pas installée.' }
 }
 
