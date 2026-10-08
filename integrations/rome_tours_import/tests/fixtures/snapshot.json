@@ -1,0 +1,14 @@
+{
+  "_note": "Synthetic test data only. Numbers use the reserved +1 555 01xx range.",
+  "services": [
+    {"id": "svc-A1", "phone": "+15550100001", "source_key": "+15550100001|2026-10-13|port-fco", "service_date": "2026-10-13", "pax": 4, "flight": null, "status": "Confirmed"}
+  ],
+  "prospects": [
+    {"id": "pro-A", "phone": "+15550100001", "source_key": "+15550100001|2026-10-13", "quote_eur": 220}
+  ],
+  "bookings": [
+    {"id": "bk-A", "phone": "+15550100001", "package_eur": 220}
+  ],
+  "payments": [],
+  "import_state": {}
+}
