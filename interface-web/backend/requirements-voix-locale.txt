@@ -1,0 +1,6 @@
+# Optionnel : transcription vocale locale (sur le PC Windows, sans service distant).
+# Environ 300 Mo de téléchargement ; le modèle de reconnaissance est téléchargé au premier usage.
+faster-whisper==1.2.1
+
+# Synthèse vocale locale (voix Piper, hors ligne).
+piper-tts==1.8.0

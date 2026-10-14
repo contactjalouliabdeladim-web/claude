@@ -1,0 +1,15 @@
+# Données personnelles et secrets (jamais dans git)
+donnees/
+*.db
+*.db-wal
+*.db-shm
+
+# Environnements
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Tests
+backend/tests/fake_llm_requests.jsonl

@@ -1,0 +1,1 @@
+Atlas is at C:\Users\JARVIS\Atlas; frontend builds into backend\atlas_server\static. Google Sheets sharing links do not authorize API writes. Google Workspace needs OAuth files google_client_secret.json and google_token.json under HERMES_HOME; the Sheets dependencies were installed, but setup reported Hermes must restart before OAuth.

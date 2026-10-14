@@ -1,0 +1,38 @@
+# Clés et configuration secrète (jamais dans git)
+config/
+.env
+*.env
+.env.*
+CODE-ACCES.txt
+certificats/
+*.key
+*.pem
+
+# Bases de données, sauvegardes et données personnelles
+*.db
+*.db-wal
+*.db-shm
+donnees/
+donnees-hermes/
+sauvegardes/
+archives/
+voix/
+
+# Modèles vocaux
+modeles-voix/
+*.onnx
+*.bin
+
+# Caches et environnements
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.pid
+*.lock
+.cache/
+.hub/
+.usage.json
+.curator_state
+.bundled_manifest
