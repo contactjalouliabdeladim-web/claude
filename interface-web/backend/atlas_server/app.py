@@ -658,7 +658,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if body.expected_updated_at is not None and abs(note["updated_at"] - body.expected_updated_at) > 1e-6:
                 raise HTTPException(409, detail={"code": "conflict", "message": "Cette note a été modifiée sur un autre appareil.",
                                                  "note": note})
-            now = time.time()
+            # Strictement plus récent : l'horloge de Windows (~15 ms) peut rendre deux écritures identiques.
+            now = max(time.time(), note["updated_at"] + 1e-3)
             db.execute("UPDATE notes SET content = ?, updated_at = ? WHERE id = ?", (body.content, now, nid))
         await st.hub.broadcast({"type": "notes.changed", "origin": request.headers.get("x-atlas-device")})
         return st.db.get_note(nid)
