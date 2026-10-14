@@ -14,6 +14,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from . import __version__
+from .cockpit import CockpitError, cockpit_for
 from .db import new_id
 from .tasks import TaskError, public_task
 from .util import today_iso
@@ -81,6 +82,17 @@ TOOLS: list[dict[str, Any]] = [
          "devise": {"type": "string", "enum": ["MAD", "EUR"]},
          "date": {"type": "string", "description": "AAAA-MM-JJ, par défaut aujourd'hui (Casablanca)"},
          "client": {"type": "string"}, "categorie": {"type": "string"}, "note": {"type": "string"}}}},
+    {"name": "cockpit", "description": "Cockpit 120K : où en est l'utilisateur de son objectif de bénéfice net "
+     "(cumul acquis, reste, %, rythme nécessaire et réel par semaine, avance/retard en jours et en DH), "
+     "l'action du jour qui rapporte si elle est fixée, et les encaissements par client. Cite ces chiffres "
+     "tels quels, sans les arrondir autrement.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "action_du_jour_definir", "description": "Fixe l'« action du jour qui rapporte » affichée en tête du "
+     "tableau de bord : UNE seule action, la plus courte vers de l'argent encaissé (relancer un prospect, envoyer "
+     "un devis, encaisser une facture…). Remplace celle du jour s'il y en avait une.",
+     "inputSchema": {"type": "object", "required": ["action"], "properties": {
+         "action": {"type": "string", "description": "Formulation courte et actionnable, ex. « Relancer Kick-Off TV pour la facture d'octobre »"},
+         "pourquoi": {"type": "string", "description": "En une phrase : pourquoi c'est le chemin le plus court vers de l'argent"}}}},
     {"name": "pages_lister", "description": "Liste les pages partagées entre Atlas et Claude (titre, étiquettes, "
      "auteur et date de la dernière modification), les plus récentes d'abord.",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -232,6 +244,21 @@ async def call_tool(st: Any, name: str, args: dict[str, Any]) -> dict[str, Any]:
             await st.turns.activity("finances", f"Mouvement financier ajouté ({kind}, {currency})", "ok",
                                     detail=f"{amount} {currency}" + (f" · {client}" if client else ""))
             return {"ok": True, "transaction": row}
+        if name == "cockpit":
+            today = today_iso(tz)
+            data = cockpit_for(st.db, st.db.get_preferences(), today)
+            data["encaissements_par_client"] = st.db.finance_by_client()
+            return data
+        if name == "action_du_jour_definir":
+            text = " ".join(str(args.get("action") or "").split())[:200]
+            if not text:
+                raise ToolError("Action vide.")
+            action = {"jour": today_iso(tz), "action": text, "pourquoi": " ".join(str(args.get("pourquoi") or "").split())[:300],
+                      "par": agent, "le": time.time()}
+            st.db.set_preference("money_action", action)
+            await st.hub.broadcast({"type": "cockpit.changed", "by": agent})
+            await st.turns.activity("taches", f"{who} a fixé l'action du jour qui rapporte", "ok", detail=text)
+            return {"ok": True, "action_du_jour": action}
         if name == "pages_lister":
             pages = st.db.list_pages()
             return {"nombre": len(pages), "pages": [public_page(p, full=False) for p in pages]}
@@ -269,7 +296,7 @@ async def call_tool(st: Any, name: str, args: dict[str, Any]) -> dict[str, Any]:
             await st.hub.broadcast({"type": "pages.changed", "id": page["id"], "by": agent})
             await st.turns.activity("pages", f"{who} a supprimé la page « {page['title'][:60]} »", "ok")
             return {"ok": True, "action": "supprimée", "page": public_page(page, full=False)}
-    except TaskError as exc:
+    except (TaskError, CockpitError) as exc:
         raise ToolError(str(exc)) from exc
     raise ToolError(f"Outil inconnu : {name}")
 

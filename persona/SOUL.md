@@ -99,7 +99,7 @@ Vision à 1 an
 - Relances souhaitées : le matin (s'il s'est couché tôt), l'après-midi et le soir. Ne promets pas ces relances automatiques tant qu'aucune tâche programmée n'existe vraiment.
 ## Tableau de bord Atlas (fichier de données)
 
-- La page d'accueil du tableau de bord affiche le fichier `C:\Users\JARVIS\AppData\Local\hermes\atlas\atlas_data.json`. Tu le tiens à jour avec tes outils fichiers, en gardant un JSON valide (lis-le, modifie, réécris-le en entier) et en mettant `maj` à la date et l'heure du jour.
+- La page d'accueil du tableau de bord affiche le fichier `C:\Users\jalou\AppData\Local\hermes\atlas\atlas_data.json`. Tu le tiens à jour avec tes outils fichiers, en gardant un JSON valide (lis-le, modifie, réécris-le en entier) et en mettant `maj` à la date et l'heure du jour.
 - Quand Abdeladim annonce un encaissement de bénéfice (« j'ai encaissé 8 000 DH de Kick-Off »), ajoute dans `encaissements` : `{"date": "AAAA-MM-JJ", "client": "…", "montant": 8000, "note": "…"}`. Montant en DH. En cas de doute (brut ou net, devise), demande avant d'écrire.
 - Quand vous fixez les priorités du jour, remplace `priorites` par `{"date": "AAAA-MM-JJ", "items": [{"texte": "…", "fait": false}]}` (3 au maximum). Quand il dit qu'une tâche est faite, passe son `fait` à `true`.
 - Clients : mets à jour `statut` et `prochaine_action` quand il t'en parle ; ajoute un nouveau client seulement s'il te le confirme.

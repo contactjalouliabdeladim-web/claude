@@ -125,6 +125,44 @@ export interface Preferences {
   autoplay_voice: boolean;
   reduce_motion: "system" | "on" | "off";
   voice_confirm_before_send: boolean;
+  cockpit_goal_mad: number;
+  cockpit_start: string;
+  cockpit_end: string;
+  cockpit_eur_mad: number;
+  cockpit_prior_mad: number;
+}
+
+export interface MoneyAction {
+  jour: string;
+  action: string;
+  pourquoi: string;
+  par: string;
+  le: number;
+}
+
+export interface Cockpit {
+  objectif_mad: number;
+  debut: string;
+  fin: string;
+  aujourdhui: string;
+  taux_eur_mad: number;
+  acquis_avant_suivi_mad: number;
+  net_mad: number;
+  net_eur: number;
+  cumul_net_mad: number;
+  reste_mad: number;
+  pourcentage: number;
+  jours_total: number;
+  jours_ecoules: number;
+  jours_restants: number;
+  rythme_necessaire_semaine_mad: number | null;
+  rythme_reel_semaine_mad: number | null;
+  attendu_a_date_mad: number;
+  ecart_mad: number;
+  ecart_jours: number;
+  etat: "dans_les_temps" | "leger_retard" | "gros_retard" | "atteint";
+  resume: string;
+  action_du_jour: MoneyAction | null;
 }
 
 export interface VoiceInfo {

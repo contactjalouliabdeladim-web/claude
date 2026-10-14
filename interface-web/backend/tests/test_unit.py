@@ -439,7 +439,7 @@ def test_mcp_stdio_roundtrip(tmp_path, monkeypatch):
     replies = [json.loads(l) for l in proc.stdout.splitlines()]
     assert [r["id"] for r in replies] == [1, 2, 3, 4, 5, 6, 7]  # pas de réponse aux notifications, rien d'autre sur stdout
     assert replies[0]["result"]["protocolVersion"] == "2025-06-18"
-    assert len(replies[1]["result"]["tools"]) == 17
+    assert len(replies[1]["result"]["tools"]) == 19
     added = replies[2]["result"]["structuredContent"]
     assert added["ok"] and added["tache"]["heure"] == "15:00" and added["tache"]["ajoutee_par"] == "Atlas"
     assert replies[3]["result"]["isError"] is True
@@ -483,3 +483,88 @@ def test_mcp_shared_pages_between_agents(tmp_path):
     assert any(l.startswith("Claude a ajouté la tâche") for l in labels)
     assert any(l.startswith("Atlas a mis à jour la page") for l in labels)
     assert "mcp_last_seen_claude" in db.get_preferences()  # contact de Claude suivi à part de celui d'Hermes
+
+
+# -- cockpit 120K ---------------------------------------------------------------------
+from atlas_server.cockpit import COCKPIT_DEFAULTS, CockpitError, compute, validate_setting  # noqa: E402
+
+
+def totals(mad_net_dh=0, eur_net=0):
+    return {"MAD": {"net_cents": int(mad_net_dh * 100)}, "EUR": {"net_cents": int(eur_net * 100)}}
+
+
+def test_cockpit_ahead_with_eur_conversion():
+    # 125 jours (29/09 → 31/01), 16 écoulés le 14/10 ; 30 000 DH + 400 € × 10,5 = 34 200 DH
+    c = compute(totals(30000, 400), dict(COCKPIT_DEFAULTS, cockpit_eur_mad=10.5), "2026-10-14")
+    assert (c["jours_total"], c["jours_ecoules"], c["jours_restants"]) == (125, 16, 110)
+    assert c["cumul_net_mad"] == 34200 and c["reste_mad"] == 85800 and c["pourcentage"] == 28.5
+    assert c["rythme_necessaire_semaine_mad"] == 5460            # 85 800 / (110 / 7)
+    assert c["rythme_reel_semaine_mad"] == 14962.5               # 34 200 / (16 / 7)
+    assert c["attendu_a_date_mad"] == 15360 and c["ecart_mad"] == 18840 and c["ecart_jours"] == 19.6
+    assert c["etat"] == "dans_les_temps"
+    assert c["resume"] == "34 200 / 120 000 DH · il te faut 5 460 DH/semaine · avance de 20 jours"
+
+
+def test_cockpit_delay_levels():
+    light = compute(totals(10000), COCKPIT_DEFAULTS, "2026-10-14")   # 15 360 attendus → −5 360 DH ≈ −5,6 j
+    assert light["etat"] == "leger_retard" and light["ecart_jours"] == -5.6 and "retard de 6 jours" in light["resume"]
+    heavy = compute(totals(0), COCKPIT_DEFAULTS, "2026-10-14")
+    assert heavy["etat"] == "gros_retard" and heavy["ecart_jours"] == -16.0
+    on_time = compute(totals(15000), COCKPIT_DEFAULTS, "2026-10-14")  # −360 DH ≈ −0,4 j : dans les temps
+    assert on_time["etat"] == "dans_les_temps" and on_time["resume"].endswith("pile dans les temps")
+
+
+def test_cockpit_prior_amount_counts_in_total_but_not_in_real_pace():
+    c = compute(totals(7000), dict(COCKPIT_DEFAULTS, cockpit_prior_mad=10000), "2026-10-05")  # 7 jours écoulés
+    assert c["cumul_net_mad"] == 17000 and c["rythme_reel_semaine_mad"] == 7000
+
+
+def test_cockpit_edges_before_start_after_end_and_reached():
+    before = compute(totals(0), COCKPIT_DEFAULTS, "2026-09-01")
+    assert before["jours_ecoules"] == 0 and before["rythme_reel_semaine_mad"] is None and before["jours_restants"] == 125
+    after = compute(totals(50000), COCKPIT_DEFAULTS, "2027-02-10")
+    assert after["jours_restants"] == 0 and after["rythme_necessaire_semaine_mad"] is None and after["etat"] == "gros_retard"
+    done = compute(totals(125000), COCKPIT_DEFAULTS, "2026-12-01")
+    assert done["etat"] == "atteint" and done["reste_mad"] == 0 and done["resume"].endswith("objectif atteint")
+    with pytest.raises(CockpitError):
+        compute(totals(0), dict(COCKPIT_DEFAULTS, cockpit_end="2026-01-01"), "2026-10-14")
+
+
+def test_cockpit_setting_validation():
+    assert validate_setting("cockpit_start", "2026-09-29") == "2026-09-29"
+    for key, bad in (("cockpit_start", "29/09"), ("cockpit_goal_mad", 0), ("cockpit_eur_mad", -1),
+                     ("cockpit_goal_mad", True), ("cockpit_prior_mad", "x")):
+        with pytest.raises(CockpitError):
+            validate_setting(key, bad)
+
+
+def test_cockpit_api_uses_existing_finances_and_preferences(client):
+    client.patch("/api/preferences", json={"cockpit_eur_mad": 11, "cockpit_start": "2026-01-01", "cockpit_end": "2026-12-31"})
+    assert client.patch("/api/preferences", json={"cockpit_eur_mad": 0}).status_code == 400
+    for kind, cents, cur in (("income", 500000, "MAD"), ("expense", 100000, "MAD"), ("income", 10000, "EUR")):
+        assert client.post("/api/finance/transactions", json={"kind": kind, "amount_cents": cents, "currency": cur,
+                                                              "date": "2026-03-01"}).status_code == 200
+    data = client.get("/api/cockpit").json()
+    assert data["cumul_net_mad"] == 4000 + 100 * 11 and data["taux_eur_mad"] == 11 and data["action_du_jour"] is None
+
+
+def test_mcp_cockpit_and_money_action(tmp_path):
+    import os
+    import subprocess
+    import sys
+    ensure_env_file(tmp_path)
+    msgs = [("finance_ajouter", {"type": "income", "montant": 3000, "devise": "MAD", "client": "Kick-Off TV"}),
+            ("action_du_jour_definir", {"action": "Relancer Ecologia pour le devis", "pourquoi": "devis prêt depuis 3 jours"}),
+            ("cockpit", {}), ("action_du_jour_definir", {"action": "  "})]
+    lines = [json.dumps({"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": n, "arguments": a}})
+             for i, (n, a) in enumerate(msgs, 1)]
+    env = dict(os.environ, ATLAS_DATA_DIR=str(tmp_path), ATLAS_DEMO="0", ATLAS_MCP_AGENT="atlas")
+    proc = subprocess.run([sys.executable, "-m", "atlas_server", "mcp-stdio"], input="\n".join(lines) + "\n",
+                          capture_output=True, text=True, encoding="utf-8", env=env,
+                          cwd=Path(__file__).resolve().parents[1], timeout=60)
+    r = [json.loads(l)["result"] for l in proc.stdout.splitlines()]
+    cockpit = r[2]["structuredContent"]
+    assert cockpit["action_du_jour"]["action"] == "Relancer Ecologia pour le devis" and cockpit["action_du_jour"]["par"] == "atlas"
+    assert cockpit["encaissements_par_client"][0]["client"] == "Kick-Off TV"
+    assert cockpit["objectif_mad"] == 120000 and "resume" in cockpit
+    assert r[3]["isError"] is True

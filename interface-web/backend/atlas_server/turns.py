@@ -38,6 +38,8 @@ TOOL_LABELS: list[tuple[str, str]] = [
     ("mcp_atlas_priorite", "Je mets à jour tes priorités"),
     ("mcp_atlas_note_ajouter", "J'ajoute une note"),
     ("mcp_atlas_notes_chercher", "Je cherche dans tes notes"),
+    ("mcp_atlas_cockpit", "Je regarde ton cockpit 120K"),
+    ("mcp_atlas_action_du_jour", "Je fixe l'action du jour qui rapporte"),
     ("mcp_atlas_page_ecrire", "J'écris dans une page partagée"),
     ("mcp_atlas_page_supprimer", "Je supprime une page partagée"),
     ("mcp_atlas_page", "Je consulte les pages partagées"),

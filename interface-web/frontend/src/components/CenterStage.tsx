@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useAtlas } from "../controller";
 import { HangUpIcon, MicIcon, MicOffIcon, MuteIcon, PhoneIcon, SparkIcon, StopIcon, VolumeIcon } from "./Icons";
+import { CockpitGauge } from "./Cockpit";
 import Orb from "./Orb";
 
 const PHASE_HINT: Record<string, string> = {
@@ -131,6 +132,8 @@ export default function CenterStage() {
         {sub && <div className={`orb-sub ${a.orbState === "error" || a.orbState === "offline" ? "warn" : ""}`}>{sub}</div>}
         {a.orbState === "offline" && <button className="btn btn-ghost btn-sm" onClick={a.reconnect}>Reconnecter</button>}
       </div>
+
+      <CockpitGauge />
 
       <div className="voice-controls">
         <button

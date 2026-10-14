@@ -11,3 +11,5 @@ Abdeladim veut une échéance par tâche et être tenu responsable. Atlas peut p
 Si Abdeladim rate une échéance, il veut expliquer lui-même la raison, puis passer directement à un nouveau plan concret et à l’action, sans s’attarder ni tourner autour du problème.
 §
 Après une tâche terminée, Abdeladim préfère enchaîner si c’est le bon moment ; Atlas peut proposer un bilan bref seulement quand la situation le justifie.
+§
+Audio vocal : transcription locale, pas de cloud.

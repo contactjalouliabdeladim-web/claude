@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from . import __version__
 from . import auth
 from .certs import local_ip_addresses
+from .cockpit import COCKPIT_DEFAULTS, CockpitError, cockpit_for, validate_setting
 from .config import Settings, load_settings
 from .db import Database, new_id
 from .demo import DemoAdapter
@@ -36,7 +37,7 @@ log = logging.getLogger("atlas")
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_JSON_BYTES = 256 * 1024
 DEFAULT_PREFS = {"timezone": "Africa/Casablanca", "autoplay_voice": True, "reduce_motion": "system",
-                 "voice_confirm_before_send": False}
+                 "voice_confirm_before_send": False, **COCKPIT_DEFAULTS}
 PUBLIC_PATHS = {"/api/public/status", "/api/auth/login", "/atlas-ca.crt"}
 DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
@@ -587,6 +588,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await st.hub.broadcast({"type": "finance.changed"})
         return row
 
+    @app.get("/api/cockpit")
+    async def cockpit(request: Request):
+        st = atlas(request)
+        try:
+            return cockpit_for(st.db, st.preferences() | st.db.get_preferences(), today_iso(st.preferences()["timezone"]))
+        except CockpitError as exc:
+            raise HTTPException(400, str(exc))
+
     # -- tâches ------------------------------------------------------------------------
     @app.get("/api/tasks")
     async def list_tasks(request: Request, scope: str = "today"):
@@ -678,6 +687,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(400, "Valeur invalide.")
             if key in ("autoplay_voice", "voice_confirm_before_send") and not isinstance(value, bool):
                 raise HTTPException(400, "Valeur invalide.")
+            if key in COCKPIT_DEFAULTS:
+                try:
+                    value = validate_setting(key, value)
+                except CockpitError as exc:
+                    raise HTTPException(400, str(exc))
             st.db.set_preference(key, value)
         prefs = st.preferences()
         await st.hub.broadcast({"type": "preferences.changed", "preferences": prefs})

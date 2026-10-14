@@ -10,7 +10,54 @@ const ZONES = [
   "Africa/Tunis", "America/Montreal", "America/New_York", "Asia/Dubai", "UTC",
 ];
 
-type Tab = "daily" | "voice" | "connection" | "data";
+type Tab = "daily" | "cockpit" | "voice" | "connection" | "data";
+
+function CockpitSettings() {
+  const a = useAtlas();
+  const p = a.prefs!;
+  const [form, setForm] = useState({
+    cockpit_goal_mad: String(p.cockpit_goal_mad), cockpit_start: p.cockpit_start, cockpit_end: p.cockpit_end,
+    cockpit_eur_mad: String(p.cockpit_eur_mad), cockpit_prior_mad: String(p.cockpit_prior_mad),
+  });
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value });
+  const num = (v: string) => Number(v.replace(/\s/g, "").replace(",", "."));
+  const save = async () => {
+    try {
+      await a.updatePrefs({
+        cockpit_goal_mad: num(form.cockpit_goal_mad), cockpit_start: form.cockpit_start, cockpit_end: form.cockpit_end,
+        cockpit_eur_mad: num(form.cockpit_eur_mad), cockpit_prior_mad: num(form.cockpit_prior_mad),
+      });
+      a.toast({ kind: "success", text: "Réglages du cockpit enregistrés." });
+    } catch (e) {
+      a.toast({ kind: "error", text: (e as Error).message });
+    }
+  };
+  return (
+    <>
+      <Row label="Objectif (bénéfice net)">
+        <div className="inline-form"><input inputMode="decimal" value={form.cockpit_goal_mad} onChange={set("cockpit_goal_mad")} aria-label="Objectif en dirhams" /> DH</div>
+        <p className="muted small">Bénéfice net = encaissements − dépenses saisis dans la Vue business.</p>
+      </Row>
+      <Row label="Période">
+        <div className="inline-form">
+          <input type="date" value={form.cockpit_start} onChange={set("cockpit_start")} aria-label="Début" /> →
+          <input type="date" value={form.cockpit_end} onChange={set("cockpit_end")} aria-label="Fin" />
+        </div>
+      </Row>
+      <Row label="Taux EUR → MAD">
+        <div className="inline-form">1 € = <input inputMode="decimal" value={form.cockpit_eur_mad} onChange={set("cockpit_eur_mad")} aria-label="Taux de conversion" /> DH</div>
+        <p className="muted small">Valeur par défaut indicative (10,8) : vérifie-la avec ton taux bancaire réel et corrige-la ici.</p>
+      </Row>
+      <Row label="Acquis avant le suivi">
+        <div className="inline-form"><input inputMode="decimal" value={form.cockpit_prior_mad} onChange={set("cockpit_prior_mad")} aria-label="Montant déjà acquis" /> DH</div>
+        <p className="muted small">Ajouté au cumul (compte pour l'avance/retard, pas pour le rythme réel).</p>
+      </Row>
+      <Row label="">
+        <button className="btn btn-gold btn-sm" onClick={save}>Enregistrer</button>
+      </Row>
+    </>
+  );
+}
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -81,6 +128,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
         <div className="tabs" role="tablist">
           {([
             ["daily", "Quotidien"],
+            ["cockpit", "Cockpit"],
             ["voice", "Voix"],
             ["connection", "Connexion"],
             ["data", "Données"],
@@ -115,6 +163,8 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
               </Row>
             </>
           )}
+
+          {tab === "cockpit" && a.prefs && <CockpitSettings />}
 
           {tab === "voice" && a.prefs && boot && (
             <>

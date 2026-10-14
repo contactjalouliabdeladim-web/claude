@@ -4,6 +4,7 @@ import { useAtlas } from "../controller";
 import { dayKey, fmt } from "../time";
 import type { Note, Priority } from "../types";
 import { CheckIcon, DownIcon, EditIcon, PlusIcon, ShareIcon, TrashIcon, UpIcon } from "./Icons";
+import { MoneyAction } from "./Cockpit";
 import Tasks from "./Tasks";
 
 function capitalize(s: string) {
@@ -24,7 +25,10 @@ export function Clock() {
   const day = dayKey(now.getTime());
   useEffect(() => {
     // Changement de date : on recharge les priorités du nouveau jour (aucun appel au modèle).
-    if (lastDay.current && lastDay.current !== day) a.loadPriorities().catch(() => undefined);
+    if (lastDay.current && lastDay.current !== day) {
+      a.loadPriorities().catch(() => undefined);
+      a.loadCockpit();
+    }
     lastDay.current = day;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [day]);
@@ -370,6 +374,7 @@ export function Notes() {
 export default function DayPanel() {
   return (
     <aside className="day-panel" aria-label="Ma journée">
+      <MoneyAction />
       <Clock />
       <Priorities />
       <Tasks />

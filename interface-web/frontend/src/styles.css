@@ -739,3 +739,30 @@ body {
 
 
 
+
+/* --- Cockpit 120K : jauge sous l'orbe + action du jour qui rapporte ------------- */
+.cockpit-gauge { --tone: var(--gold); width: 100%; max-width: 460px; margin: 10px auto 4px; padding: 12px 16px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(180deg, rgba(215, 166, 75, 0.07), rgba(215, 166, 75, 0.02)); }
+.cockpit-gauge.tone-warn { --tone: #e8a33c; }
+.cockpit-gauge.tone-bad { --tone: #d9826d; }
+.cockpit-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.cockpit-kicker { font-size: 0.68rem; letter-spacing: 0.14em; font-weight: 700; color: var(--gold); }
+.cockpit-state { font-size: 0.74rem; font-weight: 600; color: var(--tone); }
+.cockpit-bar { position: relative; height: 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.07); overflow: visible; }
+.cockpit-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--gold-deep), var(--tone)); box-shadow: 0 0 12px color-mix(in srgb, var(--tone) 45%, transparent); transition: width 0.8s ease; min-width: 2px; }
+.cockpit-marker { position: absolute; top: -4px; width: 2px; height: 16px; margin-left: -1px; border-radius: 2px; background: var(--text-2); opacity: 0.7; }
+.cockpit-summary { margin-top: 9px; text-align: center; font-size: 0.92rem; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.cockpit-detail { margin-top: 3px; text-align: center; font-size: 0.74rem; color: var(--text-3); }
+.cockpit-gauge.compact { margin: 6px auto; padding: 8px 12px; }
+.money-action { display: flex; flex-direction: column; gap: 4px; border-color: rgba(215, 166, 75, 0.45); background: linear-gradient(135deg, rgba(215, 166, 75, 0.14), rgba(215, 166, 75, 0.03)); }
+.money-action strong { font-size: 1rem; line-height: 1.35; color: var(--gold-bright); }
+.money-action p { margin: 0; font-size: 0.82rem; color: var(--text-2); }
+.money-action.empty { border-style: dashed; background: transparent; }
+.money-action.empty p { color: var(--text-3); }
+.reduce-motion .cockpit-fill { transition: none; }
+@media (max-width: 1199px) { .cockpit-gauge { flex: 1 1 100%; order: 10; margin: 8px 0 2px; max-width: none; } .cockpit-detail { display: none; } }
+@media (max-width: 799px) {
+  .center-stage { flex-wrap: wrap; }
+  .cockpit-gauge { padding: 7px 12px 6px; margin: 6px 0 0; }
+  .cockpit-head { margin-bottom: 5px; }
+  .cockpit-summary { font-size: 0.8rem; margin-top: 6px; }
+}

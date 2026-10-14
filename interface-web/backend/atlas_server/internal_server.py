@@ -16,7 +16,8 @@ from fastapi.responses import JSONResponse, Response
 
 from .mcp_tools import handle_message
 
-FORWARDED_TYPES = {"tasks.changed", "priorities.changed", "notes.changed", "finance.changed", "activity"}
+FORWARDED_TYPES = {"tasks.changed", "priorities.changed", "notes.changed", "finance.changed", "activity",
+                   "pages.changed", "cockpit.changed", "calls.changed"}
 
 
 def create_internal_app(main_app: FastAPI, token_getter: Callable[[], str]) -> FastAPI:

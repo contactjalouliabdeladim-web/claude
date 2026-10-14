@@ -15,6 +15,7 @@ import type {
   Bootstrap,
   CallState,
   ClockInfo,
+  Cockpit,
   Task,
   Conversation,
   HermesStatus,
@@ -123,6 +124,7 @@ export function useAtlasController() {
     today: [], upcoming: [], done: [], day: "",
   });
   const [financeVersion, setFinanceVersion] = useState(0);
+  const [cockpit, setCockpit] = useState<Cockpit | null>(null);
   const [flashTask, setFlashTask] = useState<string | null>(null);
   const [call, setCall] = useState<CallState>(IDLE_CALL);
   const [bargeIn, setBargeInState] = useState<boolean>(() => localPref<boolean>("bargeIn", true));
@@ -202,6 +204,14 @@ export function useAtlasController() {
     setTasks({ today: today.items, upcoming: upcoming.items, done: done.items.slice(0, 30), day: today.today });
   }, []);
 
+  const loadCockpit = useCallback(async () => {
+    try {
+      setCockpit(await api<Cockpit>("/api/cockpit"));
+    } catch {
+      /* cockpit indisponible (réglage invalide) : la jauge reste masquée */
+    }
+  }, []);
+
   const loadActivity = useCallback(async () => {
     setActivity(await api<ActivityEvent[]>("/api/activity?limit=300"));
   }, []);
@@ -225,10 +235,10 @@ export function useAtlasController() {
   }, [loadClock]);
 
   const resync = useCallback(async () => {
-    const jobs: Promise<unknown>[] = [loadConversations(), loadPriorities(), loadNotes(), loadActivity(), loadTasks(), loadClock()];
+    const jobs: Promise<unknown>[] = [loadConversations(), loadPriorities(), loadNotes(), loadActivity(), loadTasks(), loadClock(), loadCockpit()];
     if (activeConvRef.current) jobs.push(loadMessages(activeConvRef.current).catch(() => undefined));
     await Promise.all(jobs);
-  }, [loadConversations, loadPriorities, loadNotes, loadActivity, loadMessages, loadTasks, loadClock]);
+  }, [loadConversations, loadPriorities, loadNotes, loadActivity, loadMessages, loadTasks, loadClock, loadCockpit]);
 
   // -- voix : lecture au fil de l'eau (uniquement sur l'appareil demandeur) ----------------
   const setCallPhase = useCallback((phase: CallState["phase"]) => {
@@ -352,6 +362,11 @@ export function useAtlasController() {
         }
         case "finance.changed":
           setFinanceVersion((v) => v + 1);
+          loadCockpit();
+          break;
+        case "cockpit.changed":
+          loadCockpit();
+          if (msg.by && msg.by !== "user") toast({ kind: "success", text: "Nouvelle action du jour qui rapporte." });
           break;
         case "tasks.changed":
           loadTasks().catch(() => undefined);
@@ -380,10 +395,11 @@ export function useAtlasController() {
         case "preferences.changed":
           setPrefs(msg.preferences);
           loadClock();
+          loadCockpit();
           break;
       }
     },
-    [me, resync, loadConversations, loadPriorities, loadNotes, loadTasks, speech, toast, resumeCallListening, loadClock],
+    [me, resync, loadConversations, loadPriorities, loadNotes, loadTasks, speech, toast, resumeCallListening, loadClock, loadCockpit],
   );
 
   // -- démarrage ------------------------------------------------------------------------
@@ -410,7 +426,7 @@ export function useAtlasController() {
         activeConvRef.current = conv;
         await loadMessages(conv).catch(() => undefined);
       }
-      await Promise.all([loadPriorities(), loadNotes(), loadActivity(), loadTasks()]);
+      await Promise.all([loadPriorities(), loadNotes(), loadActivity(), loadTasks(), loadCockpit()]);
       setPhase("ready");
       if (!rt.current) {
         rt.current = new RealtimeClient(onRealtime, setWsStatus);
@@ -420,7 +436,7 @@ export function useAtlasController() {
       if (e instanceof ApiError && e.status === 401) setPhase("login");
       else setPhase("unreachable");
     }
-  }, [loadConversations, loadMessages, loadPriorities, loadNotes, loadActivity, loadTasks, onRealtime, applyClock]);
+  }, [loadConversations, loadMessages, loadPriorities, loadNotes, loadActivity, loadTasks, loadCockpit, onRealtime, applyClock]);
 
   useEffect(() => {
     setAuthLostHandler(() => {
@@ -833,7 +849,7 @@ export function useAtlasController() {
     stopTask, answerApproval, openConversation, newConversation, renameConversation, deleteConversation,
     loadPriorities, loadNotes, setNotes, loadActivity, localVoice, speakingId, speak, stopSpeaking,
     blockedPlayback, startListening, finishListening, cancelListening, audioLevel, autoplay,
-    tasks, loadTasks, financeVersion, flashTask, call, startCall, endCall, toggleMute, bargeIn, setBargeIn,
+    tasks, loadTasks, financeVersion, cockpit, loadCockpit, flashTask, call, startCall, endCall, toggleMute, bargeIn, setBargeIn,
     setAutoplay, volume, setVolume, micDevice, setMicDevice, updatePrefs, reduceMotion, orbState, orbLabel,
     toasts, toast, dismiss, logout, me, priorityDraft, setPriorityDraft, clockOffset,
     reconnect: () => rt.current?.reconnectNow(),

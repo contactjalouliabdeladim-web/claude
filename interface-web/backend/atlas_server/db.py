@@ -466,6 +466,12 @@ class Database:
             value["net_cents"] = value["income_cents"] - value["expense_cents"]
         return totals
 
+    def finance_by_client(self, limit: int = 30) -> list[dict]:
+        """Encaissements par client : total, nombre et date du dernier (pour repérer qui relancer)."""
+        return self.all("SELECT client, currency, SUM(amount_cents) AS total_cents, COUNT(*) AS nombre, "
+                        "MAX(date) AS dernier FROM finance_transactions WHERE kind = 'income' AND client <> '' "
+                        "GROUP BY client, currency ORDER BY dernier DESC LIMIT ?", (limit,))
+
     # -- journal d'activité --------------------------------------------------
     def add_event(self, category: str, label: str, status: str, *, duration_ms: int | None = None,
                   detail: str | None = None, run_id: str | None = None,
