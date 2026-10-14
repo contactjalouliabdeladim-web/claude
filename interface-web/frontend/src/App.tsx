@@ -6,6 +6,7 @@ import DayPanel from "./components/DayPanel";
 import { ChatIcon, CloseIcon, ListIcon, PulseIcon } from "./components/Icons";
 import Login from "./components/Login";
 import BusinessDashboard from "./components/BusinessDashboard";
+import CallPage from "./components/CallPage";
 import SettingsDialog from "./components/SettingsDialog";
 import TopBar from "./components/TopBar";
 import { AtlasProvider, useAtlas } from "./controller";
@@ -37,6 +38,29 @@ function Shell() {
     );
   }
 
+  const toasts = (
+    <div className="toasts" aria-live="assertive">
+      {a.toasts.map((t) => (
+        <div key={t.id} className={`toast toast-${t.kind}`} role={t.kind === "error" ? "alert" : "status"}>
+          <span>{t.text}</span>
+          <button className="icon-btn sm" onClick={() => a.dismiss(t.id)} aria-label="Fermer le message">
+            <CloseIcon size={14} />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+
+  // Page « Appel » : ouverte par la sonnerie (ntfy) ou par l'icône de l'appli installée.
+  if (window.location.pathname.startsWith("/appel")) {
+    return (
+      <div className={a.reduceMotion ? "reduce-motion" : ""}>
+        <CallPage />
+        {toasts}
+      </div>
+    );
+  }
+
   return (
     <div className={`app ${a.reduceMotion ? "reduce-motion" : ""} tab-${mobileTab}`}>
       {a.boot && a.boot.demo && (
@@ -61,16 +85,7 @@ function Shell() {
       </nav>
       {drawer && <ActivityDrawer onClose={() => setDrawer(false)} />}
       {settings && <SettingsDialog onClose={() => setSettings(false)} />}
-      <div className="toasts" aria-live="assertive">
-        {a.toasts.map((t) => (
-          <div key={t.id} className={`toast toast-${t.kind}`} role={t.kind === "error" ? "alert" : "status"}>
-            <span>{t.text}</span>
-            <button className="icon-btn sm" onClick={() => a.dismiss(t.id)} aria-label="Fermer le message">
-              <CloseIcon size={14} />
-            </button>
-          </div>
-        ))}
-      </div>
+      {toasts}
     </div>
   );
 }

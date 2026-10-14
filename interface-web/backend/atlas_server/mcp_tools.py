@@ -14,6 +14,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from . import __version__
+from .calls import CallScheduler
 from .cockpit import CockpitError, cockpit_for
 from .db import new_id
 from .tasks import TaskError, public_task
@@ -93,6 +94,10 @@ TOOLS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "required": ["action"], "properties": {
          "action": {"type": "string", "description": "Formulation courte et actionnable, ex. « Relancer Kick-Off TV pour la facture d'octobre »"},
          "pourquoi": {"type": "string", "description": "En une phrase : pourquoi c'est le chemin le plus court vers de l'argent"}}}},
+    {"name": "coucher_noter", "description": "Note l'heure de coucher quand l'utilisateur dit « bonne nuit ». "
+     "Elle décide de l'heure de l'appel du matin (tôt s'il se couche avant l'heure limite, sinon plus tard). "
+     "Renvoie l'heure de l'appel prévu : annonce-la-lui en une phrase.",
+     "inputSchema": {"type": "object", "properties": {}}},
     {"name": "pages_lister", "description": "Liste les pages partagées entre Atlas et Claude (titre, étiquettes, "
      "auteur et date de la dernière modification), les plus récentes d'abord.",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -259,6 +264,12 @@ async def call_tool(st: Any, name: str, args: dict[str, Any]) -> dict[str, Any]:
             await st.hub.broadcast({"type": "cockpit.changed", "by": agent})
             await st.turns.activity("taches", f"{who} a fixé l'action du jour qui rapporte", "ok", detail=text)
             return {"ok": True, "action_du_jour": action}
+        if name == "coucher_noter":
+            info = CallScheduler(st.db, st.turns.timezone).note_bedtime()
+            await st.hub.broadcast({"type": "calls.changed"})
+            await st.turns.activity("appels", f"Coucher noté à {info['coucher']}", "ok",
+                                    detail=f"appel du matin à {info['appel_du_matin']} ({info['raison']})")
+            return {"ok": True, **info}
         if name == "pages_lister":
             pages = st.db.list_pages()
             return {"nombre": len(pages), "pages": [public_page(p, full=False) for p in pages]}

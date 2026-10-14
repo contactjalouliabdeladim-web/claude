@@ -3,6 +3,7 @@ import { api } from "../api";
 import { listInputDevices, micSupport } from "../audio/recorder";
 import { useAtlas } from "../controller";
 import { fmt } from "../time";
+import CallSettings from "./CallSettings";
 import { CloseIcon } from "./Icons";
 
 const ZONES = [
@@ -10,7 +11,7 @@ const ZONES = [
   "Africa/Tunis", "America/Montreal", "America/New_York", "Asia/Dubai", "UTC",
 ];
 
-type Tab = "daily" | "cockpit" | "voice" | "connection" | "data";
+type Tab = "daily" | "cockpit" | "calls" | "voice" | "connection" | "data";
 
 function CockpitSettings() {
   const a = useAtlas();
@@ -129,6 +130,7 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           {([
             ["daily", "Quotidien"],
             ["cockpit", "Cockpit"],
+            ["calls", "Appels"],
             ["voice", "Voix"],
             ["connection", "Connexion"],
             ["data", "Données"],
@@ -165,6 +167,8 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
           )}
 
           {tab === "cockpit" && a.prefs && <CockpitSettings />}
+
+          {tab === "calls" && a.prefs && <CallSettings />}
 
           {tab === "voice" && a.prefs && boot && (
             <>

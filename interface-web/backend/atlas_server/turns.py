@@ -22,6 +22,7 @@ from fastapi import WebSocket
 
 from .db import Database
 from .hermes_adapter import HermesError
+from .calls import call_context, is_goodnight
 from .util import french_datetime, redact
 
 log = logging.getLogger("atlas.turns")
@@ -40,6 +41,7 @@ TOOL_LABELS: list[tuple[str, str]] = [
     ("mcp_atlas_notes_chercher", "Je cherche dans tes notes"),
     ("mcp_atlas_cockpit", "Je regarde ton cockpit 120K"),
     ("mcp_atlas_action_du_jour", "Je fixe l'action du jour qui rapporte"),
+    ("mcp_atlas_coucher_noter", "Je note ton heure de coucher"),
     ("mcp_atlas_page_ecrire", "J'écris dans une page partagée"),
     ("mcp_atlas_page_supprimer", "Je supprime une page partagée"),
     ("mcp_atlas_page", "Je consulte les pages partagées"),
@@ -128,6 +130,7 @@ class ActiveTurn:
     approval: dict[str, Any] | None = None
     stop_requested: bool = False
     tools_started: dict[str, float] = field(default_factory=dict)
+    context_extra: list[str] = field(default_factory=list)
     task: asyncio.Task | None = None
     last_flush: float = 0.0
 
@@ -141,6 +144,7 @@ class TurnManager:
         self.active: ActiveTurn | None = None
         self._lock = asyncio.Lock()
         self.mcp_connected = lambda: False
+        self.calls: Any = None  # planificateur d'appels (heure de coucher)
 
     # -- utilitaires ---------------------------------------------------------
     def timezone(self) -> str:
@@ -172,7 +176,7 @@ class TurnManager:
             snap["partial_content"] = self.active.content
         return snap
 
-    def build_context(self, kind: str) -> str:
+    def build_context(self, kind: str, extra: list[str] | None = None) -> str:
         tz = self.timezone()
         parts = [
             "Contexte transmis automatiquement par l'interface Atlas (informations, pas une demande) :",
@@ -184,11 +188,12 @@ class TurnManager:
         if self.mcp_connected():
             parts.append("Les outils mcp_atlas_* agissent sur son tableau de bord Atlas (tâches, priorités, notes), "
                          "visible à l'écran : utilise-les quand il te confie une tâche ou demande ce qu'il reste à faire.")
-        return " ".join(parts)
+        return " ".join(parts + (extra or []))
 
     # -- envoi -------------------------------------------------------------------
     async def submit(self, conversation_id: str, request_id: str, content: str, *, device_id: str,
-                     kind: str = "text", want_tts: bool = False, note_ids: list[str] | None = None) -> dict:
+                     kind: str = "text", want_tts: bool = False, note_ids: list[str] | None = None,
+                     call_slot: str | None = None, call_start: bool = False, call_end: bool = False) -> dict:
         existing = self.db.get_request(request_id)
         if existing:
             return {"duplicate": True, "user_message": self.db.get_message(existing["user_message_id"]),
@@ -226,6 +231,11 @@ class TurnManager:
                 title = " ".join(content.split())[:60] or DEFAULT_TITLE
                 self.db.update_conversation(conversation_id, title=title)
             turn = ActiveTurn(conversation_id, user_msg["id"], assistant_msg["id"], request_id, device_id, want_tts)
+            turn.context_extra = call_context(call_slot, call_start, call_end)
+            if self.calls is not None and is_goodnight(content):
+                info = self.calls.note_bedtime()
+                turn.context_extra.append(f"Il te dit bonne nuit : Atlas a noté son coucher à {info['coucher']} ; "
+                                          f"appel du matin prévu à {info['appel_du_matin']}. Dis-le-lui en une phrase.")
             self.active = turn
         await self.hub.broadcast({"type": "message.created", "message": user_msg})
         await self.hub.broadcast({"type": "message.created", "message": assistant_msg})
@@ -297,7 +307,7 @@ class TurnManager:
             try:
                 session_id = await self._ensure_session(turn.conversation_id)
                 final = await self.adapter.stream_turn(
-                    session_id, message, system_message=self.build_context(kind),
+                    session_id, message, system_message=self.build_context(kind, turn.context_extra),
                     on_event=lambda e: self._on_event(turn, e))
             except HermesError as exc:
                 if exc.kind != "session_not_found":
@@ -307,7 +317,7 @@ class TurnManager:
                                     conversation_id=turn.conversation_id)
                 session_id = await self._ensure_session(turn.conversation_id, force_new=True)
                 final = await self.adapter.stream_turn(
-                    session_id, message, system_message=self.build_context(kind),
+                    session_id, message, system_message=self.build_context(kind, turn.context_extra),
                     on_event=lambda e: self._on_event(turn, e))
         except HermesError as exc:
             error = exc

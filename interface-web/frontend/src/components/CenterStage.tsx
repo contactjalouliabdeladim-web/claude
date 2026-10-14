@@ -138,7 +138,7 @@ export default function CenterStage() {
       <div className="voice-controls">
         <button
           className="call-btn"
-          onClick={a.startCall}
+          onClick={() => a.startCall()}
           disabled={blocked || listening || transcribing}
           title={!sttOk ? "Transcription non disponible (Réglages > Voix)" : a.busy ? "Atlas est occupé" : "Conversation vocale en direct"}
         >

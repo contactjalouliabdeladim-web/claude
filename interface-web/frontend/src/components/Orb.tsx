@@ -74,7 +74,9 @@ export default function Orb({ state, level, reduceMotion }: Props) {
       cur.intensity += (target.intensity - cur.intensity) * k;
 
       const raw = levelRef.current();
-      const lvl = s === "listening" || s === "speaking" ? (raw === null ? 0.35 + 0.15 * Math.sin(t * 4) : raw) : 0;
+      const pulse = reduceMotion ? 0 : 0.1 + 0.08 * Math.sin(t * 3.4);
+      const lvl = s === "listening" ? Math.max(raw === null ? 0 : raw, pulse)
+        : s === "speaking" ? (raw === null ? 0.35 + 0.15 * Math.sin(t * 4) : raw) : 0;
       smoothLevel += (lvl - smoothLevel) * Math.min(1, dt * (lvl > smoothLevel ? 18 : 6));
 
       const w = canvas.width;
@@ -82,7 +84,7 @@ export default function Orb({ state, level, reduceMotion }: Props) {
       const cx = w / 2;
       const cy = h / 2;
       const base = Math.min(w, h) * 0.26;
-      const breathe = reduceMotion ? 0 : Math.sin(t * (s === "idle" ? 0.9 : 1.6)) * 0.018;
+      const breathe = reduceMotion ? 0 : Math.sin(t * (s === "idle" ? 0.75 : 1.6)) * (s === "idle" ? 0.03 : 0.018);
       const r = base * (1 + breathe + smoothLevel * 0.14);
       ctx.clearRect(0, 0, w, h);
 
@@ -101,7 +103,18 @@ export default function Orb({ state, level, reduceMotion }: Props) {
       core.addColorStop(0.78, rgba(cur.glow, 0.9));
       core.addColorStop(1, rgba(mix(cur.glow, [60, 40, 15], 0.55), 0.85));
       ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      if (s === "speaking" && !reduceMotion && smoothLevel > 0.02) {
+        const steps = 96;
+        for (let i = 0; i <= steps; i++) {
+          const a = (i / steps) * Math.PI * 2;
+          const wobble = 1 + smoothLevel * (0.045 * Math.sin(6 * a + t * 17) + 0.025 * Math.sin(11 * a - t * 23));
+          const x = cx + Math.cos(a) * r * wobble;
+          const y = cy + Math.sin(a) * r * wobble;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+      } else ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.fillStyle = core;
       ctx.fill();
 

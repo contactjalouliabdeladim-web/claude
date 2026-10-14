@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from . import __version__
 from . import auth
+from .calls import CALL_DEFAULTS, SLOTS, CallError, CallScheduler, validate_setting as validate_call_setting
 from .certs import local_ip_addresses
 from .cockpit import COCKPIT_DEFAULTS, CockpitError, cockpit_for, validate_setting
 from .config import Settings, load_settings
@@ -37,7 +38,7 @@ log = logging.getLogger("atlas")
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_JSON_BYTES = 256 * 1024
 DEFAULT_PREFS = {"timezone": "Africa/Casablanca", "autoplay_voice": True, "reduce_motion": "system",
-                 "voice_confirm_before_send": False, **COCKPIT_DEFAULTS}
+                 "voice_confirm_before_send": False, **COCKPIT_DEFAULTS, **CALL_DEFAULTS}
 PUBLIC_PATHS = {"/api/public/status", "/api/auth/login", "/atlas-ca.crt"}
 DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
@@ -56,6 +57,13 @@ class MessageBody(BaseModel):
     kind: str = Field(default="text", pattern="^(text|voice)$")
     want_tts: bool = False
     note_ids: list[str] = Field(default_factory=list, max_length=5)
+    call_slot: str | None = Field(default=None, pattern="^(morning|afternoon|evening|test|live)$")
+    call_start: bool = False
+    call_end: bool = False
+
+
+class CallSlotBody(BaseModel):
+    slot: str = Field(pattern="^(morning|afternoon|evening|test|live)$")
 
 
 class ConversationPatch(BaseModel):
@@ -186,6 +194,8 @@ class AtlasState:
                                          turn_timeout_s=settings.hermes_turn_timeout_s)
         self.turns = TurnManager(self.db, self.adapter, self.hub, settings)
         self.tasks = TaskService(self.db, self.hub, self.turns.activity, self.turns.timezone)
+        self.calls = CallScheduler(self.db, self.turns.timezone)
+        self.turns.calls = self.calls
         self._mcp_seen = float(self.db.get_preferences().get("mcp_last_seen") or 0)
         self.turns.mcp_connected = lambda: bool(self.db.get_preferences().get("mcp_last_seen"))
         self.limiter = auth.LoginRateLimiter()
@@ -234,6 +244,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             state.db.add_event("systeme", f"{interrupted} réponse(s) interrompue(s) par un arrêt du serveur",
                                "warning")
         auth.ensure_access_code(state.db, settings.data_dir)
+        state.calls.ensure_topic()
         state.db.add_event("systeme", "Serveur Atlas démarré" + (" (DÉMO)" if settings.demo else ""), "ok")
         await state.adapter.probe()
         state.background = asyncio.create_task(_background_loop(state))
@@ -261,7 +272,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return False
         host = host_header.rsplit(":", 1)[0] if not host_header.startswith("[") else host_header.split("]")[0] + "]"
         host = host.strip("[]").lower()
-        if host in {"localhost", "127.0.0.1", "::1"}:
+        if host in {"localhost", "127.0.0.1", "::1"} or host in settings.allowed_hosts:
             return True
         if not settings.lan:
             return False
@@ -442,7 +453,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             result = await st.turns.submit(conv_id, body.request_id, body.content.strip(),
                                            device_id=body.device_id, kind=body.kind, want_tts=body.want_tts,
-                                           note_ids=body.note_ids)
+                                           note_ids=body.note_ids, call_slot=body.call_slot,
+                                           call_start=body.call_start, call_end=body.call_end)
         except KeyError:
             raise HTTPException(404, "Conversation introuvable.")
         except Busy:
@@ -596,6 +608,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except CockpitError as exc:
             raise HTTPException(400, str(exc))
 
+    # -- appels ------------------------------------------------------------------------
+    @app.get("/api/calls")
+    async def calls_status(request: Request):
+        return atlas(request).calls.status()
+
+    @app.post("/api/calls/test")
+    async def calls_test(request: Request):
+        st = atlas(request)
+        try:
+            payload = await asyncio.to_thread(st.calls.ring, "test")
+        except Exception as exc:
+            await st.turns.activity("appels", "Sonnerie de test impossible", "error", detail=str(exc))
+            raise HTTPException(502, f"Sonnerie impossible : {exc}")
+        await st.turns.activity("appels", "Sonnerie de test envoyée", "ok", detail=payload["click"])
+        return {"ok": True, "click": payload["click"]}
+
+    @app.post("/api/calls/answered")
+    async def calls_answered(body: CallSlotBody, request: Request):
+        st = atlas(request)
+        st.calls.answered(body.slot)
+        if body.slot in SLOTS:
+            await st.turns.activity("appels", "Appel décroché", "ok", detail=body.slot)
+            await st.hub.broadcast({"type": "calls.changed"})
+        return {"ok": True}
+
+    @app.post("/api/calls/goodnight")
+    async def calls_goodnight(request: Request):
+        st = atlas(request)
+        info = st.calls.note_bedtime()
+        await st.turns.activity("appels", f"Coucher noté à {info['coucher']}", "ok",
+                                detail=f"appel du matin à {info['appel_du_matin']} ({info['raison']})")
+        await st.hub.broadcast({"type": "calls.changed"})
+        return info
+
     # -- tâches ------------------------------------------------------------------------
     @app.get("/api/tasks")
     async def list_tasks(request: Request, scope: str = "today"):
@@ -692,6 +738,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 try:
                     value = validate_setting(key, value)
                 except CockpitError as exc:
+                    raise HTTPException(400, str(exc))
+            if key in CALL_DEFAULTS:
+                try:
+                    value = validate_call_setting(key, value)
+                except CallError as exc:
                     raise HTTPException(400, str(exc))
             st.db.set_preference(key, value)
         prefs = st.preferences()
@@ -858,6 +909,16 @@ async def _background_loop(state: AtlasState) -> None:
     while True:
         await asyncio.sleep(15)
         tick += 1
+        try:
+            sent = await asyncio.to_thread(state.calls.tick)
+            for slot in sent:
+                state.db.add_event("appels", f"Atlas sonne : {slot}", "ok")
+            if sent:
+                await state.hub.broadcast({"type": "calls.changed"})
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Planificateur d'appels")
         try:
             state.stt.maybe_unload()
             # Toutes les 30 s si un navigateur est ouvert, toutes les 2 min sinon.

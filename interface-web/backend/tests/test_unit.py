@@ -439,7 +439,7 @@ def test_mcp_stdio_roundtrip(tmp_path, monkeypatch):
     replies = [json.loads(l) for l in proc.stdout.splitlines()]
     assert [r["id"] for r in replies] == [1, 2, 3, 4, 5, 6, 7]  # pas de réponse aux notifications, rien d'autre sur stdout
     assert replies[0]["result"]["protocolVersion"] == "2025-06-18"
-    assert len(replies[1]["result"]["tools"]) == 19
+    assert len(replies[1]["result"]["tools"]) == 20
     added = replies[2]["result"]["structuredContent"]
     assert added["ok"] and added["tache"]["heure"] == "15:00" and added["tache"]["ajoutee_par"] == "Atlas"
     assert replies[3]["result"]["isError"] is True
@@ -568,3 +568,122 @@ def test_mcp_cockpit_and_money_action(tmp_path):
     assert cockpit["encaissements_par_client"][0]["client"] == "Kick-Off TV"
     assert cockpit["objectif_mad"] == 120000 and "resume" in cockpit
     assert r[3]["isError"] is True
+
+
+# -- appels d'Atlas ----------------------------------------------------------------------
+from datetime import datetime as _dt  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
+
+from atlas_server.calls import CallError, CallScheduler, call_context, is_goodnight, validate_setting as call_setting  # noqa: E402
+
+CASA = ZoneInfo("Africa/Casablanca")
+
+
+def ts(text):
+    return _dt.fromisoformat(text).replace(tzinfo=CASA).timestamp()
+
+
+def make_scheduler(tmp_path, now_text, **prefs):
+    db = Database(tmp_path / "atlas.db")
+    for k, v in prefs.items():
+        db.set_preference(k, v)
+    sent = []
+    clock = {"now": ts(now_text)}
+    sch = CallScheduler(db, lambda: "Africa/Casablanca", send=lambda payload, s: sent.append(payload),
+                        now=lambda: clock["now"])
+    return sch, sent, clock
+
+
+def test_morning_call_depends_on_bedtime(tmp_path):
+    cases = [("2026-10-13T23:10", "05:30"), ("2026-10-13T23:45", "08:00"), ("2026-10-14T00:30", "08:00"),
+             (None, "08:00"), ("2026-10-10T22:00", "08:00")]
+    for bed, expected in cases:
+        prefs = {"last_bedtime": {"ts": ts(bed)}} if bed else {}
+        sch, _, _ = make_scheduler(tmp_path / (bed or "none").replace(":", ""), "2026-10-14T04:00", **prefs)
+        morning = sch.status()["aujourdhui"][0]
+        assert (morning["slot"], morning["time"]) == ("morning", expected), bed
+
+
+def test_goodnight_sets_next_morning_call(tmp_path):
+    sch, _, clock = make_scheduler(tmp_path, "2026-10-13T22:55")
+    info = sch.note_bedtime()
+    assert info == {"coucher": "22:55", "jour_appel": "2026-10-14", "appel_du_matin": "05:30",
+                    "raison": "couché à 22:55, avant 23:30"}
+    clock["now"] = ts("2026-10-14T00:40")  # coucher après minuit → appel tardif le jour même
+    assert sch.note_bedtime()["appel_du_matin"] == "08:00"
+
+
+def test_ring_once_then_single_retry_after_15_minutes(tmp_path):
+    sch, sent, clock = make_scheduler(tmp_path, "2026-10-14T07:59", call_afternoon_enabled=False,
+                                      call_evening_enabled=False, ntfy_topic="atlas-secret-topic-123456",
+                                      call_public_url="https://hp.tailnet.ts.net")
+    assert sch.tick() == []
+    clock["now"] = ts("2026-10-14T08:00:10")
+    assert sch.tick() == ["morning"] and sch.tick() == []
+    assert sent[0]["topic"] == "atlas-secret-topic-123456" and sent[0]["priority"] == 5
+    assert sent[0]["title"] == "Atlas t'appelle" and sent[0]["click"] == "https://hp.tailnet.ts.net/appel?slot=morning"
+    clock["now"] = ts("2026-10-14T08:14")
+    assert sch.tick() == []
+    clock["now"] = ts("2026-10-14T08:15:15")
+    assert sch.tick() == ["morning:relance"] and "relance" in sent[1]["message"]
+    for later in ("2026-10-14T08:31", "2026-10-14T08:50", "2026-10-14T09:20"):
+        clock["now"] = ts(later)
+        assert sch.tick() == []  # jamais plus d'une relance
+    assert len(sent) == 2
+
+
+def test_answered_call_is_not_retried_and_disabled_slots_never_ring(tmp_path):
+    sch, sent, clock = make_scheduler(tmp_path, "2026-10-14T14:00:05", call_evening_enabled=False)
+    sch.tick()  # l'appel du matin (08:00) est passé depuis plus d'une heure : pas de sonnerie tardive
+    assert [p["click"].split("=")[1] for p in sent] == ["afternoon"]
+    sch.answered("afternoon")
+    clock["now"] = ts("2026-10-14T14:20")
+    assert sch.tick() == []
+    clock["now"] = ts("2026-10-14T20:00:30")
+    assert sch.tick() == [] and len(sent) == 1
+    sch2, sent2, _ = make_scheduler(tmp_path / "off", "2026-10-14T08:00:05", calls_enabled=False)
+    assert sch2.tick() == [] and sch2.status()["aujourdhui"] == []
+
+
+def test_ring_failure_is_logged_without_retry_storm(tmp_path):
+    db = Database(tmp_path / "atlas.db")
+    calls = []
+
+    def broken(payload, s):
+        calls.append(1)
+        raise OSError("réseau coupé")
+
+    clock = {"now": ts("2026-10-14T08:00:05")}
+    sch = CallScheduler(db, lambda: "Africa/Casablanca", send=broken, now=lambda: clock["now"])
+    sch.tick(); sch.tick()
+    assert len(calls) == 1 and "réseau" in sch.entry("2026-10-14", "morning")["error"]
+
+
+def test_goodnight_detection_and_call_context():
+    assert is_goodnight("Bonne nuit Atlas !") and is_goodnight("allez, bonne  nuit") and not is_goodnight("nuit blanche")
+    assert any("2 à 3 phrases" in p for p in call_context("live", False, False))
+    morning = " ".join(call_context("morning", True, False))
+    assert "mcp_atlas_cockpit" in morning and "mcp_atlas_priorite_ajouter" in morning and "mcp_atlas_action_du_jour_definir" in morning
+    assert "raccroche" in " ".join(call_context("live", False, True))
+    assert call_context(None, True, True) == []
+    assert call_setting("call_early", "05:30") == "05:30"
+    for key, bad in (("call_early", "5h30"), ("calls_enabled", "oui"), ("ntfy_topic", "court"), ("call_public_url", "http://x")):
+        with pytest.raises(CallError):
+            call_setting(key, bad)
+
+
+def test_calls_api(client, monkeypatch):
+    from atlas_server import calls as calls_module
+    sent = []
+    monkeypatch.setattr(calls_module, "send_ntfy", lambda payload, s: sent.append(payload))
+    st = client.app.state.atlas
+    st.calls.send = calls_module.send_ntfy
+    assert client.get("/api/preferences").json()["ntfy_topic"].startswith("atlas-")  # sujet secret généré au démarrage
+    assert client.post("/api/calls/test").json()["ok"] and sent[0]["click"].endswith("/appel?slot=test")
+    assert client.patch("/api/preferences", json={"call_early": "6h"}).status_code == 400
+    assert client.patch("/api/preferences", json={"call_early": "06:00", "call_afternoon_enabled": False}).status_code == 200
+    info = client.post("/api/calls/goodnight").json()
+    assert info["appel_du_matin"] in ("06:00", "08:00")
+    status = client.get("/api/calls").json()
+    assert status["coucher"] and [p["slot"] for p in status["aujourdhui"]] == ["morning", "evening"]
+    assert client.post("/api/calls/answered", json={"slot": "pirate"}).status_code == 422

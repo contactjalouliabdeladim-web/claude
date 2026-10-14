@@ -42,6 +42,33 @@ interface PendingSend {
   kind: "text" | "voice";
   noteIds: string[];
   wantTts: boolean;
+  callSlot?: CallSlot;
+  callStart?: boolean;
+  callEnd?: boolean;
+}
+
+export type CallSlot = "morning" | "afternoon" | "evening" | "test" | "live";
+
+interface SendOptions {
+  kind?: "text" | "voice";
+  callSlot?: CallSlot;
+  callStart?: boolean;
+  callEnd?: boolean;
+}
+
+const CALL_OPENING: Record<string, { title: string; text: string }> = {
+  morning: { title: "Appel du matin", text: "📞 Appel du matin — je décroche." },
+  afternoon: { title: "Point de l'après-midi", text: "📞 Point de l'après-midi — je décroche." },
+  evening: { title: "Bilan du soir", text: "📞 Bilan du soir — je décroche." },
+  test: { title: "Appel de test", text: "📞 Appel de test — je décroche." },
+};
+
+/** « c'est bon », « à plus », « bonne nuit »… dits seuls (phrase courte) : on raccroche après la réponse d'Atlas. */
+export function isHangUp(text: string): boolean {
+  const t = text.toLowerCase().replace(/[’`]/g, "'").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z' ]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!t || t.split(" ").length > 7) return false;
+  return /\b(c'?est bon|a plus( tard)?|au revoir|bonne nuit|bye|ciao|tchao|on raccroche|raccroche|c'?est tout|a demain|a tout a l'?heure|bonne (journee|soiree))\b/.test(t);
 }
 
 export interface PriorityDraft {
@@ -139,7 +166,10 @@ export function useAtlasController() {
   bargeInRef.current = bargeIn;
   const player = useRef(new VoicePlayer());
   const speechRef = useRef<SpeechQueue | null>(null);
-  const sendRef = useRef<(content: string, opts?: { kind?: "text" | "voice" }) => Promise<boolean>>(async () => false);
+  const sendRef = useRef<(content: string, opts?: SendOptions) => Promise<boolean>>(async () => false);
+  const callSlotRef = useRef<CallSlot>("live");
+  const hangupPending = useRef(false);
+  const endCallRef = useRef<() => void>(() => undefined);
   const rt = useRef<RealtimeClient | null>(null);
   messagesRef.current = messages;
   const activeConvRef = useRef(activeConvId);
@@ -274,6 +304,10 @@ export function useAtlasController() {
         setLocalVoice((v) => (v === "speaking" ? "none" : v));
         if (how === "finished") reportClient("playback_finished");
         if (how === "stopped") reportClient("playback_stopped");
+        if (callRef.current.active && hangupPending.current && how === "finished") {
+          endCallRef.current();
+          return;
+        }
         if (callRef.current.active && callRef.current.phase !== "hearing") resumeCallListening();
       },
       onError: (message) =>
@@ -356,7 +390,8 @@ export function useAtlasController() {
           }
           if (callRef.current.active && m.role === "assistant" && m.origin_device === me) {
             setCall((c) => ({ ...c, atlasCaption: m.content.slice(-600) }));
-            if (m.status !== "complete" || !speech.active) resumeCallListening();
+            if (hangupPending.current && (m.status !== "complete" || !speech.active)) window.setTimeout(() => endCallRef.current(), 1200);
+            else if (m.status !== "complete" || !speech.active) resumeCallListening();
           }
           break;
         }
@@ -511,6 +546,9 @@ export function useAtlasController() {
             kind: pending.kind,
             want_tts: pending.wantTts,
             note_ids: pending.noteIds,
+            call_slot: pending.callSlot || null,
+            call_start: !!pending.callStart,
+            call_end: !!pending.callEnd,
           },
         });
         setUncertain(null);
@@ -542,7 +580,7 @@ export function useAtlasController() {
   );
 
   const send = useCallback(
-    async (content: string, opts: { kind?: "text" | "voice" } = {}) => {
+    async (content: string, opts: SendOptions = {}) => {
       const text = content.trim();
       if (!text || sending) return false;
       if (busy) {
@@ -559,6 +597,9 @@ export function useAtlasController() {
         kind,
         noteIds: attachedNotes,
         wantTts: kind === "voice" && (autoplayRef.current || callRef.current.active),
+        callSlot: opts.callSlot,
+        callStart: opts.callStart,
+        callEnd: opts.callEnd,
       });
     },
     [sending, busy, toast, newConversation, submit, attachedNotes],
@@ -676,15 +717,24 @@ export function useAtlasController() {
       }
       setCall((c) => ({ ...c, userCaption: text, atlasCaption: "" }));
       setCallPhase("waiting");
-      const ok = await sendRef.current(text, { kind: "voice" });
-      if (!ok) resumeCallListening();
+      const bye = isHangUp(text);
+      if (bye) hangupPending.current = true;
+      const ok = await sendRef.current(text, { kind: "voice", callSlot: callSlotRef.current, callEnd: bye });
+      if (!ok) {
+        if (bye) endCallRef.current();
+        else resumeCallListening();
+      } else if (bye) {
+        window.setTimeout(() => hangupPending.current && callRef.current.active && endCallRef.current(), 60000);
+      }
     },
     [toast, setCallPhase, resumeCallListening],
   );
 
-  const startCall = useCallback(async () => {
+  const startCall = useCallback(async (slot: CallSlot = "live") => {
     unlockAudio();
     if (callRef.current.active) return;
+    callSlotRef.current = slot;
+    hangupPending.current = false;
     cancelListening();
     stopSpeaking();
     if (boot && !boot.voice.stt.available) {
@@ -712,11 +762,34 @@ export function useAtlasController() {
       micError(e);
       return;
     }
+    const opening = CALL_OPENING[slot];
+    if (opening) {
+      // Appel d'Atlas (sonnerie) : on signale le décroché, puis Atlas parle le premier dans une conversation dédiée.
+      api("/api/calls/answered", { method: "POST", json: { slot } }).catch(() => undefined);
+      callMic.current.setMode("paused");
+      setCallPhase("waiting");
+      try {
+        const conv = await api<Conversation>("/api/conversations", { method: "POST" });
+        const day = new Date().toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" });
+        await api(`/api/conversations/${conv.id}`, { method: "PATCH", json: { title: `${opening.title} — ${day}` } });
+        await loadConversations();
+        setActiveConvId(conv.id);
+        activeConvRef.current = conv.id;
+        setLocalPref("conversation", conv.id);
+        setMessages([]);
+        const ok = await sendRef.current(opening.text, { kind: "voice", callSlot: slot, callStart: true });
+        if (!ok) resumeCallListening();
+      } catch (e) {
+        toast({ kind: "error", text: (e as Error).message || "Ouverture de l'appel impossible." });
+        resumeCallListening();
+      }
+      return;
+    }
     if (serverState.state !== "idle") {
       callMic.current.setMode("paused");
       setCallPhase("waiting");
     } else setCallPhase("listening");
-  }, [boot, micDevice, serverState.state, cancelListening, stopSpeaking, speech, setCallPhase, onCallUtterance, micError, toast]);
+  }, [boot, micDevice, serverState.state, cancelListening, stopSpeaking, speech, setCallPhase, onCallUtterance, micError, toast, loadConversations, resumeCallListening]);
 
   const endCall = useCallback(() => {
     if (callMic.current) callMic.current.close();
@@ -724,8 +797,10 @@ export function useAtlasController() {
     speech.stop(false);
     setLocalVoice("none");
     setSpeakingId(null);
+    hangupPending.current = false;
     setCall(IDLE_CALL);
   }, [speech]);
+  endCallRef.current = endCall;
 
   const toggleMute = useCallback(() => {
     setCall((c) => {

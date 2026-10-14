@@ -130,6 +130,33 @@ export interface Preferences {
   cockpit_end: string;
   cockpit_eur_mad: number;
   cockpit_prior_mad: number;
+  calls_enabled: boolean;
+  call_bedtime_cutoff: string;
+  call_early: string;
+  call_late: string;
+  call_afternoon_enabled: boolean;
+  call_afternoon: string;
+  call_evening_enabled: boolean;
+  call_evening: string;
+  ntfy_server: string;
+  ntfy_topic: string;
+  call_public_url: string;
+}
+
+export interface CallPlanItem {
+  slot: "morning" | "afternoon" | "evening";
+  time: string;
+  why: string;
+  at: number;
+  quand?: string;
+  sonneries?: number;
+  decroche?: boolean;
+}
+
+export interface CallsStatus {
+  aujourdhui: CallPlanItem[];
+  prochain: CallPlanItem | null;
+  coucher: { ts: number; local: string } | null;
 }
 
 export interface MoneyAction {

@@ -1,0 +1,17 @@
+{
+  "name": "Atlas — Appel",
+  "short_name": "Atlas",
+  "description": "Parler à Atlas mains libres, comme un appel.",
+  "lang": "fr",
+  "start_url": "/appel",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#090e18",
+  "theme_color": "#090e18",
+  "icons": [
+    { "src": "/icons/atlas-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/atlas-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/atlas-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

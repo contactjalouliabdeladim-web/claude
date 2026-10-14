@@ -96,6 +96,7 @@ class Settings:
     demo: bool = False
     mcp_port: int = 8766
     mcp_token: str = ""
+    allowed_hosts: tuple[str, ...] = ()  # ex. le nom Tailscale du PC (accès via « tailscale serve »)
     max_message_chars: int = 20000
     max_audio_bytes: int = 12 * 1024 * 1024
 
@@ -121,7 +122,7 @@ def load_settings(data_dir: Path | None = None) -> Settings:
     env = parse_env_file(data_dir / "atlas.env")
     # Les variables d'environnement du processus ont priorité (pratique pour les tests).
     for key in list(env.keys()) + [
-        "ATLAS_DEMO", "ATLAS_PORT", "ATLAS_MCP_PORT", "ATLAS_LAN", "HERMES_URL", "HERMES_API_KEY", "ATLAS_STT", "ATLAS_TTS",
+        "ATLAS_DEMO", "ATLAS_PORT", "ATLAS_MCP_PORT", "ATLAS_LAN", "ATLAS_ALLOWED_HOSTS", "HERMES_URL", "HERMES_API_KEY", "ATLAS_STT", "ATLAS_TTS",
     ]:
         if os.environ.get(key):
             env[key] = os.environ[key]
@@ -149,6 +150,7 @@ def load_settings(data_dir: Path | None = None) -> Settings:
         demo=_bool(env.get("ATLAS_DEMO")),
         mcp_port=int(env.get("ATLAS_MCP_PORT") or 8766),
         mcp_token=env.get("ATLAS_MCP_TOKEN", "").strip(),
+        allowed_hosts=tuple(h.strip().lower() for h in env.get("ATLAS_ALLOWED_HOSTS", "").split(",") if h.strip()),
     )
 
 
